@@ -1,0 +1,268 @@
+{
+  "users": [
+    {
+      "id": "usr_forge_kuznets",
+      "username": "@Kuznets",
+      "displayName": "Кузнець Forge",
+      "email": "kuznets@forgemuscle.app",
+      "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces",
+      "authProvider": "google",
+      "googleId": "google_seed_1001",
+      "role": "ADMIN",
+      "createdAt": "2026-08-16T06:28:20.470Z",
+      "lastLogin": "2026-09-15T15:52:31.482Z",
+      "bio": "Легендарний коваль тіла та духу. Майстер заліза та володар власної ваги.",
+      "discipline": "hybrid",
+      "level": 27,
+      "xp": 4820,
+      "forgeScore": 1840,
+      "reputationRank": "Mentor",
+      "streak": 14,
+      "isPremium": true,
+      "privacy": {
+        "profileVisibility": "public",
+        "activityVisibility": "public",
+        "onlineStatus": "show",
+        "messagePermission": "everyone"
+      },
+      "notifications": {
+        "messages": true,
+        "community": true,
+        "battle": true,
+        "guild": true,
+        "achievements": true,
+        "challenges": true
+      },
+      "theme": "dark",
+      "hasCompletedOnboarding": true,
+      "guildName": "Братство Сталі",
+      "purchasedProductIds": [
+        "prod_1",
+        "prod_4"
+      ]
+    },
+    {
+      "id": "usr_forge_arnold",
+      "username": "@IronArnie",
+      "displayName": "Арнольд Сталевий",
+      "email": "arnold@forgemuscle.app",
+      "avatar": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop&crop=faces",
+      "authProvider": "local",
+      "role": "VERIFIED_CREATOR",
+      "createdAt": "2026-08-01T06:28:20.471Z",
+      "lastLogin": "2026-09-15T15:43:31.530Z",
+      "bio": "Перевірений творець тренувальних програм. Жим штанги — це релігія.",
+      "discipline": "bodybuilding",
+      "level": 19,
+      "xp": 3200,
+      "forgeScore": 1450,
+      "reputationRank": "Master",
+      "streak": 9,
+      "isPremium": true,
+      "privacy": {
+        "profileVisibility": "public",
+        "activityVisibility": "public",
+        "onlineStatus": "show",
+        "messagePermission": "everyone"
+      },
+      "notifications": {
+        "messages": true,
+        "community": true,
+        "battle": true,
+        "guild": true,
+        "achievements": true,
+        "challenges": true
+      },
+      "theme": "dark",
+      "hasCompletedOnboarding": true,
+      "guildName": "Титани Залу",
+      "purchasedProductIds": []
+    }
+  ],
+  "sessions": [
+    {
+      "id": "ses_1789487011530_mqlfah",
+      "userId": "usr_forge_arnold",
+      "token": "fgt_1jzj58twpvy_1789487011530",
+      "device": "Chrome — Windows",
+      "browser": "Chrome",
+      "os": "Windows",
+      "ip": "95.158.48.117",
+      "createdAt": "2026-09-15T15:43:31.530Z",
+      "lastActive": "2026-09-15T16:05:27.665Z"
+    },
+    {
+      "id": "ses_1789487080195_m2uiwh",
+      "userId": "usr_forge_kuznets",
+      "token": "fgt_7658xpo540k_1789487080195",
+      "device": "Chrome — Android",
+      "browser": "Chrome",
+      "os": "Android",
+      "ip": "192.162.134.102",
+      "createdAt": "2026-09-15T15:44:40.195Z",
+      "lastActive": "2026-09-15T15:46:44.796Z"
+    },
+    {
+      "id": "ses_1789487551482_1rdxy3",
+      "userId": "usr_forge_kuznets",
+      "token": "fgt_n19q4mjie98_1789487551482",
+      "device": "Firefox — Linux",
+      "browser": "Firefox",
+      "os": "Linux",
+      "ip": "192.162.134.102",
+      "createdAt": "2026-09-15T15:52:31.482Z",
+      "lastActive": "2026-09-17T14:57:28.855Z"
+    }
+  ],
+  "messages": [
+    {
+      "id": "msg_c1",
+      "channelId": "room_calisthenics",
+      "authorId": "usr_forge_taras",
+      "authorName": "Тарас «Залізо»",
+      "authorAvatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&h=120&fit=crop&crop=faces",
+      "authorRank": "Mentor",
+      "authorLevel": 28,
+      "content": "Хто сьогодні на майданчику тренував вибухові підтягування? Обовʼязково розминайте обертальну манжету плеча з легкою гумою перед сетом!",
+      "createdAt": "2026-09-15T12:27:34.343Z",
+      "reactions": {
+        "🔥": [
+          "usr_forge_kuznets",
+          "usr_forge_arnold"
+        ],
+        "💪": [
+          "usr_forge_taras",
+          "usr_forge_arnold"
+        ]
+      }
+    },
+    {
+      "id": "msg_c2",
+      "channelId": "room_calisthenics",
+      "authorId": "usr_forge_oleg",
+      "authorName": "Олег Стриж",
+      "authorAvatar": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&h=120&fit=crop&crop=faces",
+      "authorRank": "Fighter",
+      "authorLevel": 16,
+      "content": "Якраз додав 5 підходів по 5 повторень до грудей. З гумою відчуття звʼязок у ліктях набагато мʼякше.",
+      "createdAt": "2026-09-15T13:27:34.343Z",
+      "reactions": {
+        "👏": [
+          "usr_forge_taras",
+          "usr_forge_arnold"
+        ],
+        "🔥": [
+          "usr_forge_arnold"
+        ],
+        "⚔️": [
+          "usr_forge_arnold"
+        ]
+      }
+    },
+    {
+      "id": "msg_b1",
+      "channelId": "room_bodybuilding",
+      "authorId": "usr_forge_arnold",
+      "authorName": "Арнольд Сталевий",
+      "authorAvatar": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop&crop=faces",
+      "authorRank": "Master",
+      "authorLevel": 19,
+      "content": "Нагадую всім: у жимі штанги лежачи не скидайте вагу на груди за інерцією. 2 секунди паузи внизу — і грудні вибухнуть ростом.",
+      "createdAt": "2026-09-15T11:27:34.343Z",
+      "reactions": {
+        "⚔️": [
+          "usr_forge_kuznets",
+          "usr_forge_arnold"
+        ],
+        "🔥": [
+          "usr_forge_kuznets",
+          "usr_forge_arnold"
+        ]
+      }
+    },
+    {
+      "id": "msg_b2",
+      "channelId": "room_bodybuilding",
+      "authorId": "usr_forge_kuznets",
+      "authorName": "Кузнець Forge",
+      "authorAvatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces",
+      "authorRank": "Mentor",
+      "authorLevel": 27,
+      "content": "Золоті слова. Чистий контроль амплітуди кує справжню силу без травм плечових суглобів.",
+      "createdAt": "2026-09-15T12:27:34.343Z",
+      "reactions": {
+        "💪": [
+          "usr_forge_arnold"
+        ]
+      }
+    },
+    {
+      "id": "msg_beg1",
+      "channelId": "room_beginners",
+      "authorId": "usr_forge_daria",
+      "authorName": "Дарина Нутрієнт",
+      "authorAvatar": "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=120&h=120&fit=crop&crop=faces",
+      "authorRank": "Mentor",
+      "authorLevel": 31,
+      "content": "Новачки, не бійтеся запитувати в розділі Ask the Forge! Краще поставити просте питання про техніку, ніж лікувати плечі через 2 місяці.",
+      "createdAt": "2026-09-15T09:27:34.343Z",
+      "reactions": {
+        "🌱": [
+          "usr_forge_kuznets"
+        ]
+      }
+    },
+    {
+      "id": "msg_1789487021078_eiufn",
+      "channelId": "room_bodybuilding",
+      "authorId": "usr_forge_arnold",
+      "authorName": "Арнольд Сталевий",
+      "authorAvatar": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop&crop=faces",
+      "authorRank": "Master",
+      "authorLevel": 19,
+      "content": "Привіт",
+      "createdAt": "2026-09-15T15:43:41.078Z",
+      "reactions": {
+        "🔥": [
+          "usr_forge_arnold"
+        ]
+      }
+    },
+    {
+      "id": "msg_1789487552438_brmhz",
+      "channelId": "room_bodybuilding",
+      "authorId": "usr_forge_kuznets",
+      "authorName": "Кузнець Forge",
+      "authorAvatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces",
+      "authorRank": "Mentor",
+      "authorLevel": 27,
+      "content": "gygjghhj",
+      "createdAt": "2026-09-15T15:52:32.438Z",
+      "reactions": {}
+    },
+    {
+      "id": "msg_1789487563789_8dcln",
+      "channelId": "room_bodybuilding",
+      "authorId": "usr_forge_arnold",
+      "authorName": "Арнольд Сталевий",
+      "authorAvatar": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop&crop=faces",
+      "authorRank": "Master",
+      "authorLevel": 19,
+      "content": "васян",
+      "createdAt": "2026-09-15T15:52:43.789Z",
+      "reactions": {}
+    },
+    {
+      "id": "msg_1789487572977_j0j6r",
+      "channelId": "room_bodybuilding",
+      "authorId": "usr_forge_kuznets",
+      "authorName": "Кузнець Forge",
+      "authorAvatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces",
+      "authorRank": "Mentor",
+      "authorLevel": 27,
+      "content": "херня но норм",
+      "createdAt": "2026-09-15T15:52:52.977Z",
+      "reactions": {}
+    }
+  ]
+}

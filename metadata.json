@@ -1,0 +1,6 @@
+{
+  "name": "ForgeMuscle",
+  "description": "Інтерактивний тренажерний хаб бодибілдингу та калістеніки з аудіоефектами, анімаціями, кузнею програм, камера-трекером та Battle Mode.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
