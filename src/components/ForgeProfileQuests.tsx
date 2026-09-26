@@ -8,8 +8,8 @@ import {
   Discipline
 } from '../types';
 import { communityStore, REPUTATION_RANKS } from '../services/communityStore';
+import { authStore } from '../services/authStore';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 import {
   User,
   Target,
@@ -85,7 +85,6 @@ export const ForgeProfileQuests: React.FC<ForgeProfileQuestsProps> = ({ onEarnXp
     const xp = communityStore.claimDailyQuest(id);
     if (xp > 0 && onEarnXp) {
       onEarnXp(xp);
-      arnoVoice.speak(`Квест виконано! Отримано плюс ${xp} досвіду.`);
     }
   };
 
@@ -106,14 +105,12 @@ export const ForgeProfileQuests: React.FC<ForgeProfileQuestsProps> = ({ onEarnXp
       setCurrentRandomChallenge(challenge);
       setIsRolling(false);
       sound.playAnvilHit();
-      arnoVoice.speak(`Твій випадковий челендж: ${challenge.title}! Рідкість ${challenge.rarity.toUpperCase()}.`);
     }, 450);
   };
 
   const handleAcceptRandomChallenge = () => {
     setAcceptedRandomChallenge(true);
     sound.playLevelUp();
-    arnoVoice.speak(`Виклик прийнято! Час починати виконання.`);
   };
 
   const handleCompleteRandomChallenge = () => {
@@ -121,21 +118,32 @@ export const ForgeProfileQuests: React.FC<ForgeProfileQuestsProps> = ({ onEarnXp
     sound.playTrophy();
     if (onEarnXp) onEarnXp(currentRandomChallenge.xpReward);
     communityStore.addReputationPoints(25, 'Виконання випадкового челенджу');
-    arnoVoice.speak(`Чудова робота! Випадковий челендж виконано, нагороду додано до твого арсеналу!`);
     setCurrentRandomChallenge(null);
     setAcceptedRandomChallenge(false);
   };
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    const updatedUsername = editUsername.trim() || profile.username;
     communityStore.updateProfile({
-      username: editUsername.trim() || profile.username,
+      username: updatedUsername,
       bio: editBio.trim(),
       discipline: editDiscipline,
       avatar: selectedAvatarUrl
     });
+
+    try {
+      await authStore.updateProfile({
+        username: updatedUsername,
+        bio: editBio.trim(),
+        discipline: editDiscipline,
+        avatar: selectedAvatarUrl
+      });
+    } catch {
+      // Keep local state intact
+    }
+
     setShowEditModal(false);
-    arnoVoice.speak(`Профіль успішно оновлено!`);
   };
 
   const rarityStyles: Record<string, { bg: string; text: string; border: string }> = {

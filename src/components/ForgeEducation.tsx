@@ -3,7 +3,6 @@ import { WikiArticle, MythFactItem, WikiSection, AcademyCourse, AcademyLesson } 
 import { communityStore } from '../services/communityStore';
 import { academyStore } from '../services/academyStore';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 import {
   BookOpen,
   HelpCircle,
@@ -143,12 +142,10 @@ export const ForgeEducation: React.FC<ForgeEducationProps> = ({ onEarnXp, initia
       sound.playLevelUp();
       setScore((prev) => prev + 1);
       setStreak((prev) => prev + 1);
-      arnoVoice.speak('Точно в ціль! Справжнє наукове розуміння.');
       if (onEarnXp) onEarnXp(30);
     } else {
       sound.playClick();
       setStreak(0);
-      arnoVoice.speak('Не зовсім так! Але тепер ти знаєш істину.');
     }
   };
 
@@ -159,7 +156,6 @@ export const ForgeEducation: React.FC<ForgeEducationProps> = ({ onEarnXp, initia
     } else {
       setQuizCompleted(true);
       sound.playTrophy();
-      arnoVoice.speak(`Вікторину завершено! Твій результат: ${score + (userAnswer ? 0 : 0)} з ${mythFacts.length}.`);
     }
   };
 
@@ -174,6 +170,26 @@ export const ForgeEducation: React.FC<ForgeEducationProps> = ({ onEarnXp, initia
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      {/* Parked Module Banner */}
+      <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/40 flex items-center justify-between gap-4 text-amber-300">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-amber-500/20 border border-amber-500/30">
+            <BookOpen className="w-5 h-5 text-amber-400" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold uppercase tracking-wider text-white">
+              Функція в розробці (Паркований модуль)
+            </h3>
+            <p className="text-xs text-neutral-300">
+              Модуль Академії та Бази знань наразі припаркований для зосередження на змагальному циклі Duels та перевірці техніки віджимань.
+            </p>
+          </div>
+        </div>
+        <span className="hidden sm:inline-block px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30 whitespace-nowrap">
+          Паркований модуль
+        </span>
+      </div>
+
       {/* Top Banner */}
       <div className="relative rounded-3xl bg-gradient-to-r from-neutral-900 via-neutral-950 to-blue-950/40 border border-blue-500/30 p-6 sm:p-8 overflow-hidden shadow-2xl">
         <div className="absolute right-0 top-0 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />

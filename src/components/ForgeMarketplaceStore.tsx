@@ -26,7 +26,6 @@ import {
   PartnerSponsorship
 } from '../types';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 
 interface ForgeMarketplaceStoreProps {
   initialTab?: 'marketplace' | 'cosmetics' | 'premium' | 'creator_hub';
@@ -132,6 +131,26 @@ export const ForgeMarketplaceStore: React.FC<ForgeMarketplaceStoreProps> = ({ in
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      {/* Parked Module Banner */}
+      <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/40 flex items-center justify-between gap-4 text-amber-300">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-amber-500/20 border border-amber-500/30">
+            <ShoppingBag className="w-5 h-5 text-amber-400" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold uppercase tracking-wider text-white">
+              Функція в розробці (Паркований модуль)
+            </h3>
+            <p className="text-xs text-neutral-300">
+              Маркетплейс та цифрові товари авторів заплановані до запуску після фіналізації базової ліги перевірених воркаутів.
+            </p>
+          </div>
+        </div>
+        <span className="hidden sm:inline-block px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30 whitespace-nowrap">
+          Паркований модуль
+        </span>
+      </div>
+
       {/* Top Banner & Tab Controls */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-neutral-800 pb-6">
         <div>
@@ -354,7 +373,9 @@ export const ForgeMarketplaceStore: React.FC<ForgeMarketplaceStoreProps> = ({ in
                     <button
                       onClick={() => {
                         sound.playClick();
-                        arnoVoice.speak(`Промокод ${spon.discountCode} скопійовано!`);
+                        if (navigator.clipboard) {
+                          navigator.clipboard.writeText(spon.discountCode);
+                        }
                       }}
                       className="text-[11px] text-neutral-400 hover:text-amber-300 underline mt-1"
                     >
@@ -527,8 +548,7 @@ export const ForgeMarketplaceStore: React.FC<ForgeMarketplaceStoreProps> = ({ in
               <div className="mt-6 pt-4 border-t border-neutral-800">
                 <button
                   onClick={() => {
-                    sound.playClick();
-                    arnoVoice.speak('Запит на виведення коштів надіслано до банківського шлюзу.');
+                    sound.playAnvilHit();
                   }}
                   className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >

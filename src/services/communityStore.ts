@@ -23,7 +23,6 @@ import {
   Discipline
 } from '../types';
 import { sound } from './soundEngine';
-import { arnoVoice } from './arnoVoice';
 
 export const REPUTATION_RANKS: ReputationRankInfo[] = [
   { rank: 'Newcomer', minPoints: 0, title: 'Новачок Кузні', color: 'text-neutral-400', badge: '🌱', description: 'Перші кроки в спортивній спільноті' },
@@ -43,174 +42,9 @@ export function getReputationRank(points: number): ReputationRank {
   return 'Newcomer';
 }
 
-const SEED_POSTS: CommunityPost[] = [
-  {
-    id: 'post_1',
-    title: 'Мій шлях від 0 до 12 чистих виходів силою на дві руки (Детальний гайд)',
-    content: 'Вихід силою — це не просто сила підтягувань, це насамперед вибуховий потяг до грудей і швидкий перехід кистей (фаза транзиції). Основні помилки: тягнути по черзі через одну руку (це ламає ліктьові суглоби) та відсутність хитання ніг на початку. Тренуйте високі вибухові підтягування до пояса на низькому турніку з гумою, плюс глибокі віджимання від перекладини на рівні паху.',
-    category: 'calisthenics',
-    type: 'guide',
-    tags: ['калістеніка', 'вихід силі', 'турнік', 'техніка'],
-    authorId: 'user_taras',
-    authorName: 'Тарас «Залізо»',
-    authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&h=120&fit=crop&crop=faces',
-    authorRank: 'Mentor',
-    createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-    upvotes: 42,
-    isUpvotedByMe: false,
-    commentsCount: 3,
-    isPinned: true,
-    comments: [
-      {
-        id: 'comm_1',
-        postId: 'post_1',
-        authorId: 'user_oleg',
-        authorName: 'Олег Стриж',
-        authorAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&h=120&fit=crop&crop=faces',
-        authorRank: 'Fighter',
-        content: 'Повністю згоден щодо вибухових підтягувань! Сам додав роботу з гумою і за місяць додав +3 повторення без розгойдування.',
-        createdAt: new Date(Date.now() - 3600000 * 3).toISOString(),
-        upvotes: 7
-      },
-      {
-        id: 'comm_2',
-        postId: 'post_1',
-        authorId: 'user_vitalik',
-        authorName: 'Віталій В.',
-        authorAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=120&h=120&fit=crop&crop=faces',
-        authorRank: 'Helper',
-        content: 'А яку гуму порадиш для початку при вазі 80 кг?',
-        createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-        upvotes: 2
-      }
-    ]
-  },
-  {
-    id: 'post_2',
-    title: 'Чому ваші грудні не ростуть у жимі лежачи: зміщення акценту на трицепс і плечі',
-    content: 'Найчастіша проблема новачків у класичному жимі штанги лежачи — пласкі лопатки та надто широкий або вузький хват. Якщо лопатки не зведені й не опущені до таза (депресія лопаток), передня дельта бере на себе до 60% стартового зусилля. Обовʼязково робіть міст (арку), розпирайте підлогу ногами (leg drive) і торкайтеся штангою лінії низу грудей, а не шиї.',
-    category: 'bodybuilding',
-    type: 'advice',
-    tags: ['бодибілдинг', 'жим лежачи', 'груди', 'паверліфтинг'],
-    authorId: 'user_maks',
-    authorName: 'Максим «Титановий»',
-    authorAvatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=120&h=120&fit=crop&crop=faces',
-    authorRank: 'Master',
-    createdAt: new Date(Date.now() - 3600000 * 12).toISOString(),
-    upvotes: 35,
-    isUpvotedByMe: false,
-    commentsCount: 1,
-    comments: [
-      {
-        id: 'comm_3',
-        postId: 'post_2',
-        authorId: 'user_andriy',
-        authorName: 'Андрій К.',
-        authorAvatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=120&h=120&fit=crop&crop=faces',
-        authorRank: 'Helper',
-        content: 'Дуже цінно, спробував опустити лопатки — біль у передній дельті одразу зник!',
-        createdAt: new Date(Date.now() - 3600000 * 8).toISOString(),
-        upvotes: 5
-      }
-    ]
-  },
-  {
-    id: 'post_3',
-    title: 'Харчовий таймінг: що реально працює перед і після тренування',
-    content: 'Забудьте про міф про 30-хвилинне закриття анаболічного вікна. Реальний період підвищеної чутливості до поживних речовин триває до 24-48 годин. Найголовніше: 1) Легкі повільні вуглеводи за 90-120 хв до тренування (вівсянка/банан); 2) 0.4-0.5 г білка на кг ваги протягом 2 годин після завершення; 3) Гідратація — мінус 2% води зменшує силу на 15%.',
-    category: 'nutrition',
-    type: 'experience',
-    tags: ['харчування', 'білок', 'гідратація', 'відновлення'],
-    authorId: 'user_daria',
-    authorName: 'Дарина Нутрієнт',
-    authorAvatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=120&h=120&fit=crop&crop=faces',
-    authorRank: 'Mentor',
-    createdAt: new Date(Date.now() - 86400000).toISOString(),
-    upvotes: 28,
-    isUpvotedByMe: false,
-    commentsCount: 0
-  }
-];
+const SEED_POSTS: CommunityPost[] = [];
 
-const SEED_QUESTIONS: AskQuestion[] = [
-  {
-    id: 'q_1',
-    title: 'Як уникнути болю в ліктях (епікондиліту) при частих підтягуваннях прямим хватом?',
-    details: 'Тренуюся 4 рази на тиждень, роблю багато підтягувань вузьким та широким хватом. Останні 2 тижні ниє зовнішня сторона ліктя. Що змінити в програмі та як відновитися без повної зупинки?',
-    category: 'calisthenics',
-    tags: ['лікті', 'підтягування', 'травми', 'відновлення'],
-    authorId: 'user_artur',
-    authorName: 'Артур_Новак',
-    authorAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&h=120&fit=crop&crop=faces',
-    authorRank: 'Helper',
-    createdAt: new Date(Date.now() - 3600000 * 18).toISOString(),
-    upvotes: 19,
-    isUpvotedByMe: false,
-    answersCount: 2,
-    isResolved: true,
-    bestAnswerId: 'ans_1',
-    reputationBounty: 50,
-    answers: [
-      {
-        id: 'ans_1',
-        questionId: 'q_1',
-        authorId: 'user_taras',
-        authorName: 'Тарас «Залізо»',
-        authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&h=120&fit=crop&crop=faces',
-        authorRank: 'Mentor',
-        content: '1. Тимчасово перейди на паралельний хват (нейтральний) або гімнастичні кільця — вони дозволяють кисті природно обертатися й розвантажують зв’язки ліктя. 2. Додай ексцентричні вправи на розгиначі пальців та передпліччя з гумкою. 3. Жодного локауту ліктя в нижній точці під час болю. 4. Масаж тригерних точок передпліччя тенісним м’ячем.',
-        createdAt: new Date(Date.now() - 3600000 * 16).toISOString(),
-        upvotes: 14,
-        isUpvotedByMe: false,
-        isBestAnswer: true
-      },
-      {
-        id: 'ans_2',
-        questionId: 'q_1',
-        authorId: 'user_oleg',
-        authorName: 'Олег Стриж',
-        authorAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&h=120&fit=crop&crop=faces',
-        authorRank: 'Fighter',
-        content: 'Також зменш обсяг на 40% на 10 днів. Мені допомогла магнезія і відмова від дуже тонких слизьких турніків.',
-        createdAt: new Date(Date.now() - 3600000 * 10).toISOString(),
-        upvotes: 4,
-        isUpvotedByMe: false,
-        isBestAnswer: false
-      }
-    ]
-  },
-  {
-    id: 'q_2',
-    title: 'Чи є сенс новачку вживати креатин моногідрат у перші 3 місяці тренувань?',
-    details: 'Почав тренуватися місяць тому (бодибілдинг). В залі радять одразу пити креатин. Чи дасть це ефект, чи краще спочатку налагодити техніку та звичайний раціон?',
-    category: 'nutrition',
-    tags: ['креатин', 'добавки', 'новачки'],
-    authorId: 'user_dmytro',
-    authorName: 'Дмитро К.',
-    authorAvatar: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=120&h=120&fit=crop&crop=faces',
-    authorRank: 'Newcomer',
-    createdAt: new Date(Date.now() - 3600000 * 8).toISOString(),
-    upvotes: 11,
-    isUpvotedByMe: false,
-    answersCount: 1,
-    isResolved: false,
-    answers: [
-      {
-        id: 'ans_3',
-        questionId: 'q_2',
-        authorId: 'user_maks',
-        authorName: 'Максим «Титановий»',
-        authorAvatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=120&h=120&fit=crop&crop=faces',
-        authorRank: 'Master',
-        content: 'Креатин — абсолютно безпечна і робоча добавка, але в перші 3 місяці твої м’язи й так ростимуть шаленими темпами завдяки нейром’язовій адаптації. Сфокусуйся на стабільних 1.6-2.0 г білка на кг ваги та правильній траєкторії руху. Креатин підключиш через півроку, коли настане перше плато!',
-        createdAt: new Date(Date.now() - 3600000 * 4).toISOString(),
-        upvotes: 8,
-        isUpvotedByMe: false,
-        isBestAnswer: false
-      }
-    ]
-  }
-];
+const SEED_QUESTIONS: AskQuestion[] = [];
 
 const SEED_GUILDS: Guild[] = [
   {
@@ -223,7 +57,7 @@ const SEED_GUILDS: Guild[] = [
     membersCount: 284,
     totalXp: 48900,
     level: 7,
-    leaderName: 'Максим «Титановий»',
+    leaderName: 'Iron Guildmaster',
     activeChallenge: 'Спільний жим 50 000 кг за тиждень',
     isJoinedByMe: false
   },
@@ -237,7 +71,7 @@ const SEED_GUILDS: Guild[] = [
     membersCount: 342,
     totalXp: 62400,
     level: 9,
-    leaderName: 'Тарас «Залізо»',
+    leaderName: 'Calisthenics Lead',
     activeChallenge: '10 000 чистих підтягувань братством',
     isJoinedByMe: true
   },
@@ -251,7 +85,7 @@ const SEED_GUILDS: Guild[] = [
     membersCount: 215,
     totalXp: 34100,
     level: 5,
-    leaderName: 'Олег Стриж',
+    leaderName: 'Home Fitness Lead',
     activeChallenge: 'Щоденна планка 5 хв x 7 днів',
     isJoinedByMe: false
   },
@@ -265,7 +99,7 @@ const SEED_GUILDS: Guild[] = [
     membersCount: 460,
     totalXp: 28700,
     level: 4,
-    leaderName: 'Дарина Нутрієнт',
+    leaderName: 'Beginner Mentor',
     activeChallenge: '100% відвідування 3 тренувань за тиждень',
     isJoinedByMe: false
   }
@@ -493,7 +327,7 @@ const SEED_WIKI_ARTICLES: WikiArticle[] = [
 ## 2. Головні помилки
 - **Вихід через одну руку («куряче крило»):** Перевантажує сухожилля біцепса та медіальний надвиросток ліктя. Категорично заборонено!
 - **Падіння на турнік грудьми:** Свідчить про недостатню висоту тяги. Потрібно підтягуватися вище.`,
-    authorName: 'Тарас «Залізо»',
+    authorName: 'Forge Academy',
     readTimeMinutes: 4,
     tags: ['калістеніка', 'вихід на дві', 'турнік', 'біомеханіка'],
     views: 1240,
@@ -516,7 +350,7 @@ const SEED_WIKI_ARTICLES: WikiArticle[] = [
 
 ### Поняття RIR (Reps in Reserve):
 Більшість робочих підходів натурального атлета має завершуватися на рівні 1-2 RIR (1-2 повторення до повного відмови). Постійна відмова перевантажує нервову систему.`,
-    authorName: 'Максим «Титановий»',
+    authorName: 'Forge Academy',
     readTimeMinutes: 5,
     tags: ['бодибілдинг', 'прогресія', 'RPE', 'обсяг'],
     views: 980,
@@ -534,7 +368,7 @@ const SEED_WIKI_ARTICLES: WikiArticle[] = [
 - **Базова норма:** 35-40 мл чистої води на кожен кілограм ваги тіла.
 - **Тренувальний бонус:** +500-800 мл на кожну годину інтенсивного потовиділення.
 - **Електроліти:** Натрій (сіль) та калій забезпечують роботу натрій-калієвого насоса клітинних мембран, без якого нервовий імпульс не передається мʼязовому волокну. Додавайте дрібку якісної морської солі у воду під час важких літніх тренувань.`,
-    authorName: 'Дарина Нутрієнт',
+    authorName: 'Forge Academy',
     readTimeMinutes: 3,
     tags: ['вода', 'гідратація', 'електроліти', 'здоровʼя'],
     views: 810,
@@ -715,7 +549,6 @@ class CommunityStore {
     this.addReputationPoints(15, 'Створення корисної публікації');
     this.save();
     sound.playLevelUp();
-    arnoVoice.speak(`Чудовий допис! Твій внесок у спільноту приніс плюс п'ятнадцять очок репутації.`);
     return newPost;
   }
 
@@ -792,7 +625,6 @@ class CommunityStore {
     this.addReputationPoints(10, 'Нове запитання в Кузні');
     this.save();
     sound.playLevelUp();
-    arnoVoice.speak(`Запитання опубліковано! Наставники Кузні скоро дадуть відповідь.`);
     return newQuestion;
   }
 
@@ -820,7 +652,6 @@ class CommunityStore {
     this.addReputationPoints(15, 'Відповідь на запитання');
     this.save();
     sound.playAnvilHit();
-    arnoVoice.speak(`Дякую за відповідь! Допомога побратимам гартує авторитет.`);
   }
 
   public markBestAnswer(questionId: string, answerId: string) {
@@ -837,7 +668,6 @@ class CommunityStore {
     this.addReputationPoints(50, 'Отримання відзнаки Best Answer');
     this.save();
     sound.playTrophy();
-    arnoVoice.speak(`Чудово! Найкращу відповідь відзначено зіркою Кузні та бонусом репутації!`);
   }
 
   public toggleAnswerUpvote(questionId: string, answerId: string) {
@@ -866,7 +696,6 @@ class CommunityStore {
         g.membersCount += 1;
         this.userProfile.guildId = g.id;
         this.userProfile.guildName = g.name;
-        arnoVoice.speak(`Вітаю у гільдії ${g.name}! Твій молот тепер служить спільній перемозі.`);
       } else if (g.isJoinedByMe) {
         g.isJoinedByMe = false;
         g.membersCount = Math.max(1, g.membersCount - 1);
@@ -910,7 +739,6 @@ class CommunityStore {
     this.userProfile.completedChallengesCount += 1;
     this.addReputationPoints(80, 'Виконання щотижневого челенджу');
     sound.playTrophy();
-    arnoVoice.speak(`Неймовірно! Щотижневий виклик підкорено. Твоя нагорода зарахована!`);
     this.save();
     return c.xpReward;
   }
@@ -949,7 +777,6 @@ class CommunityStore {
     this.addReputationPoints(40, 'Публікація статті у Forge Wiki');
     this.save();
     sound.playTrophy();
-    arnoVoice.speak(`Статтю додано до загальної бази знань! Твій внесок оцінять сотні атлетів.`);
     return newArticle;
   }
 
@@ -961,7 +788,6 @@ class CommunityStore {
     if (newRank !== this.userProfile.reputationRank) {
       this.userProfile.reputationRank = newRank;
       sound.playTrophy();
-      arnoVoice.speak(`Вітаю! Твій ранг репутації підвищено до «${newRank}»!`);
     }
     this.save();
   }
@@ -991,7 +817,6 @@ class CommunityStore {
 
     this.save();
     sound.playClick();
-    arnoVoice.speak(`Скаргу прийнято. Модератори Кузні перевірять відповідність правилам.`);
   }
 
   public blockUser(userId: string, userName: string) {
@@ -999,7 +824,6 @@ class CommunityStore {
       this.userProfile.blockedUserIds.push(userId);
       this.save();
       sound.playClick();
-      arnoVoice.speak(`Користувача ${userName} заблоковано. Його дописи приховані з твоєї стрічки.`);
     }
   }
 

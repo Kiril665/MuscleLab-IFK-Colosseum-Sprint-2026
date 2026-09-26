@@ -26,7 +26,6 @@ import { journeyStore, ForgeEngineOptions } from '../services/journeyStore';
 import { UserJourney, ForgeEngineWorkout, Discipline, DifficultyLevel, GoalType, Exercise } from '../types';
 import { EXERCISES } from '../data/exercisesData';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 
 interface ForgeJourneyEngineProps {
   onStartExercise: (exercise: Exercise) => void;
@@ -69,8 +68,6 @@ export const ForgeJourneyEngine: React.FC<ForgeJourneyEngineProps> = ({
     setSelectedBranch(branch);
     journeyStore.setDiscipline(branch);
     if (onSelectDiscipline) onSelectDiscipline(branch);
-    const branchName = branch === 'bodybuilding' ? 'Бодибілдингу' : branch === 'calisthenics' ? 'Калістеніки' : 'Гібридного Атлетизму';
-    arnoVoice.speak(`Перемкнуто на бойову гілку ${branchName}! Твій персональний шлях та вправи оновлено!`, { force: true });
   };
 
   const handleGenerate = () => {

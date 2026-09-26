@@ -1,6 +1,5 @@
 import { ForgeUser, UserSessionInfo, OnboardingData, CloudProgressSyncPayload } from '../types';
 import { sound } from './soundEngine';
-import { arnoVoice } from './arnoVoice';
 
 type AuthListener = () => void;
 
@@ -88,40 +87,6 @@ class AuthStore {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
     return headers;
-  }
-
-  // Quick switch or demo login for multi-user chat testing
-  public async loginAsDemo(username: string = '@Kuznets'): Promise<ForgeUser> {
-    this.isLoading = true;
-    this.notify();
-
-    try {
-      const res = await fetch('/api/auth/demo-login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username })
-      });
-
-      if (!res.ok) {
-        throw new Error('Failed to log in demo user');
-      }
-
-      const data = await res.json();
-      this.token = data.token;
-      this.currentUser = data.user;
-      localStorage.setItem('forgemuscle_auth_token', data.token);
-      localStorage.setItem('forgemuscle_user_cache', JSON.stringify(data.user));
-      this.syncStatus = 'synced';
-      this.lastSyncedTime = new Date().toLocaleTimeString();
-      this.isLoading = false;
-      this.notify();
-      sound.playLevelUp();
-      return data.user;
-    } catch (err) {
-      this.isLoading = false;
-      this.notify();
-      throw err;
-    }
   }
 
   public async fetchMe(): Promise<ForgeUser | null> {
@@ -214,7 +179,13 @@ class AuthStore {
 
       if (!res.ok) {
         const errData = await res.json();
-        throw new Error(errData.error || "Невірний логін або пароль.");
+        const error: any = new Error(errData.error || "Невірний логін або пароль.");
+        if (errData.requiresPasswordReset) {
+          error.requiresPasswordReset = true;
+          error.email = errData.email;
+          error.resetToken = errData.resetToken;
+        }
+        throw error;
       }
 
       const data = await res.json();
@@ -234,6 +205,74 @@ class AuthStore {
       this.notify();
       throw err;
     }
+  }
+
+  // Request password reset token
+  public async forgotPassword(email: string): Promise<{ success: boolean; message: string; resetToken?: string }> {
+    const res = await fetch('/api/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Помилка при відновленні пароля.');
+    }
+
+    return await res.json();
+  }
+
+  // Set new password with one-time reset token
+  public async resetPassword(token: string, newPassword: string): Promise<{ success: boolean; user: ForgeUser }> {
+    this.isLoading = true;
+    this.notify();
+
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, newPassword })
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Не вдалося скинути пароль.');
+      }
+
+      const data = await res.json();
+      this.token = data.token;
+      this.currentUser = data.user;
+      localStorage.setItem('forgemuscle_auth_token', data.token);
+      localStorage.setItem('forgemuscle_user_cache', JSON.stringify(data.user));
+      this.syncStatus = 'synced';
+      this.lastSyncedTime = new Date().toLocaleTimeString();
+      this.isLoading = false;
+      this.notify();
+
+      sound.playLevelUp();
+      return { success: true, user: data.user };
+    } catch (err: any) {
+      this.isLoading = false;
+      this.notify();
+      throw err;
+    }
+  }
+
+  // Change password for currently authenticated user
+  public async changePassword(currentPassword: string, newPassword: string): Promise<boolean> {
+    const res = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({ currentPassword, newPassword })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Помилка зміни пароля.');
+    }
+
+    return true;
   }
 
   // Local Register
@@ -292,7 +331,6 @@ class AuthStore {
       this.notify();
 
       sound.playAnvilHit();
-      arnoVoice.speak(`Вітаю у персональній кузні ForgeMuscle, ${this.currentUser?.username}! Твій шлях розпочато.`, { force: true });
       return resData.user;
     } catch (err: any) {
       throw err;

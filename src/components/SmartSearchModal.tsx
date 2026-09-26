@@ -10,11 +10,14 @@ import {
   Flame, 
   Sparkles,
   ArrowRight,
-  Shield
+  Camera,
+  HelpCircle
 } from 'lucide-react';
 import { EXERCISES } from '../data/exercisesData';
 import { communityStore } from '../services/communityStore';
 import { academyStore } from '../services/academyStore';
+import { HELP_ARTICLES, HelpArticle } from '../data/helpArticles';
+import { isParkedModuleEnabled } from '../config/featureFlags';
 import { Exercise } from '../types';
 import { sound } from '../services/soundEngine';
 
@@ -24,7 +27,7 @@ interface SmartSearchModalProps {
   onNavigate: (tab: string, itemData?: any) => void;
 }
 
-type SearchCategory = 'all' | 'exercises' | 'wiki' | 'academy' | 'community' | 'challenges';
+export type SearchCategory = 'all' | 'exercises' | 'help' | 'academy' | 'wiki' | 'community' | 'challenges';
 
 export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
   isOpen,
@@ -34,6 +37,24 @@ export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
   const [query, setQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<SearchCategory>('all');
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const parkedEnabled = isParkedModuleEnabled();
+
+  // Categories list formed dynamically based on feature flags
+  const availableCategories = useMemo<SearchCategory[]>(() => {
+    const base: SearchCategory[] = ['all', 'exercises', 'help'];
+    if (parkedEnabled) {
+      base.push('academy', 'wiki', 'community', 'challenges');
+    }
+    return base;
+  }, [parkedEnabled]);
+
+  // Reset category if selected category is not available
+  useEffect(() => {
+    if (!availableCategories.includes(selectedCategory)) {
+      setSelectedCategory('all');
+    }
+  }, [availableCategories, selectedCategory]);
 
   useEffect(() => {
     if (isOpen) {
@@ -54,15 +75,25 @@ export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  const wikiArticles = useMemo(() => communityStore.getWikiArticles(), []);
-  const academyCourses = useMemo(() => academyStore.getCourses(), []);
-  const posts = useMemo(() => communityStore.getPosts(), []);
-  const questions = useMemo(() => communityStore.getQuestions(), []);
-  const challenges = useMemo(() => communityStore.getWeeklyChallenges(), []);
+  // Only call parked stores if parked modules are explicitly enabled
+  const wikiArticles = useMemo(() => parkedEnabled ? communityStore.getWikiArticles() : [], [parkedEnabled]);
+  const academyCourses = useMemo(() => parkedEnabled ? academyStore.getCourses() : [], [parkedEnabled]);
+  const posts = useMemo(() => parkedEnabled ? communityStore.getPosts() : [], [parkedEnabled]);
+  const questions = useMemo(() => parkedEnabled ? communityStore.getQuestions() : [], [parkedEnabled]);
+  const challenges = useMemo(() => parkedEnabled ? communityStore.getWeeklyChallenges() : [], [parkedEnabled]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return { exercises: [], wiki: [], academy: [], community: [], challenges: [] };
+    if (!q) {
+      return { 
+        exercises: [], 
+        help: [], 
+        wiki: [], 
+        academy: [], 
+        community: [], 
+        challenges: [] 
+      };
+    }
 
     // Search exercises
     const matchedExercises = EXERCISES.filter((ex) => 
@@ -75,57 +106,61 @@ export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
       (ex.tips && ex.tips.toLowerCase().includes(q))
     ).slice(0, 6);
 
-    // Search Wiki
-    const matchedWiki = wikiArticles.filter((art) =>
+    // Search Help & Verification Articles
+    const matchedHelp = HELP_ARTICLES.filter((art) =>
+      art.title.toLowerCase().includes(q) ||
+      art.section.toLowerCase().includes(q) ||
+      art.body.toLowerCase().includes(q) ||
+      art.tags.some(t => t.toLowerCase().includes(q))
+    ).slice(0, 5);
+
+    // Parked results (guarded)
+    const matchedWiki = parkedEnabled ? wikiArticles.filter((art) =>
       art.title.toLowerCase().includes(q) ||
       art.section.toLowerCase().includes(q) ||
       art.tags.some(t => t.toLowerCase().includes(q)) ||
       art.paragraphs.some(p => p.toLowerCase().includes(q))
-    ).slice(0, 5);
+    ).slice(0, 5) : [];
 
-    // Search Academy
-    const matchedAcademy = academyCourses.filter((c) =>
+    const matchedAcademy = parkedEnabled ? academyCourses.filter((c) =>
       c.title.toLowerCase().includes(q) ||
       c.description.toLowerCase().includes(q) ||
       c.category.toLowerCase().includes(q) ||
       c.lessons.some(l => l.title.toLowerCase().includes(q) || l.summary.toLowerCase().includes(q))
-    ).slice(0, 4);
+    ).slice(0, 4) : [];
 
-    // Search Community
-    const matchedPosts = posts.filter((p) =>
+    const matchedPosts = parkedEnabled ? posts.filter((p) =>
       p.title.toLowerCase().includes(q) ||
       p.content.toLowerCase().includes(q) ||
       p.tags.some(t => t.toLowerCase().includes(q))
-    ).slice(0, 4);
+    ).slice(0, 4) : [];
 
-    const matchedQuestions = questions.filter((qu) =>
+    const matchedQuestions = parkedEnabled ? questions.filter((qu) =>
       qu.title.toLowerCase().includes(q) ||
       qu.details.toLowerCase().includes(q) ||
       qu.tags.some(t => t.toLowerCase().includes(q))
-    ).slice(0, 3);
+    ).slice(0, 3) : [];
 
-    // Search Challenges
-    const matchedChallenges = challenges.filter((ch) =>
+    const matchedChallenges = parkedEnabled ? challenges.filter((ch) =>
       ch.title.toLowerCase().includes(q) ||
       ch.description.toLowerCase().includes(q) ||
       ch.category.toLowerCase().includes(q)
-    ).slice(0, 3);
+    ).slice(0, 3) : [];
 
     return {
       exercises: matchedExercises,
+      help: matchedHelp,
       wiki: matchedWiki,
       academy: matchedAcademy,
       community: [...matchedPosts, ...matchedQuestions],
       challenges: matchedChallenges
     };
-  }, [query, wikiArticles, academyCourses, posts, questions, challenges]);
+  }, [query, parkedEnabled, wikiArticles, academyCourses, posts, questions, challenges]);
 
   const totalResultsCount = 
     results.exercises.length + 
-    results.wiki.length + 
-    results.academy.length + 
-    results.community.length + 
-    results.challenges.length;
+    results.help.length + 
+    (parkedEnabled ? (results.wiki.length + results.academy.length + results.community.length + results.challenges.length) : 0);
 
   if (!isOpen) return null;
 
@@ -143,29 +178,29 @@ export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Єдиний пошук по ForgeMuscle (вправи, академія, гайди, квести)..."
+            placeholder="Шукайте вправи, верифікацію, правила битв (відтискання, DISPUTED, liveness, solana)..."
             className="w-full bg-transparent text-white text-base sm:text-lg placeholder-neutral-500 focus:outline-none font-sans"
           />
           {query && (
             <button
               onClick={() => setQuery('')}
-              className="p-1 rounded-lg text-neutral-400 hover:text-white transition-colors"
+              className="p-1 rounded-lg text-neutral-400 hover:text-white transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
           )}
           <button
             onClick={onClose}
-            className="px-2.5 py-1 rounded-lg bg-neutral-800 text-neutral-400 text-xs hover:text-white font-mono"
+            className="px-2.5 py-1 rounded-lg bg-neutral-800 text-neutral-400 text-xs hover:text-white font-mono cursor-pointer"
           >
             ESC
           </button>
         </div>
 
-        {/* Quick Category Chips */}
+        {/* Dynamic Category Chips */}
         <div className="flex items-center gap-1.5 px-4 py-2.5 bg-neutral-950/60 border-b border-neutral-800/80 overflow-x-auto no-scrollbar text-xs">
           <span className="text-neutral-500 font-medium mr-1 shrink-0">Фільтр:</span>
-          {(['all', 'exercises', 'academy', 'wiki', 'community', 'challenges'] as SearchCategory[]).map((cat) => (
+          {availableCategories.map((cat) => (
             <button
               key={cat}
               onClick={() => {
@@ -180,6 +215,7 @@ export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
             >
               {cat === 'all' && 'Усі категорії'}
               {cat === 'exercises' && 'Вправи'}
+              {cat === 'help' && 'Допомога'}
               {cat === 'academy' && 'Академія'}
               {cat === 'wiki' && 'Wiki & Гайди'}
               {cat === 'community' && 'Спільнота'}
@@ -195,10 +231,32 @@ export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
               <Sparkles className="w-8 h-8 text-amber-500/60 mx-auto animate-pulse" />
               <div className="text-sm font-bold text-neutral-300">Введіть будь-який запит для смарт-пошуку</div>
               <p className="text-xs text-neutral-500 max-w-sm mx-auto">
-                Приклади: «підтягування», «спина», «віджимання», «прогресивне перевантаження», «креатин», «челендж»
+                Приклади: «відтискання», «присідання», «DISPUTED», «liveness», «solana», «battle»
               </p>
               <div className="flex flex-wrap justify-center gap-2 pt-2">
-                {['Підтягування', 'Бруси', 'Груди', 'Гіпертрофія', 'Гайд на вихід'].map((sample) => (
+                <button
+                  onClick={() => {
+                    sound.playClick();
+                    onClose();
+                    onNavigate('camera');
+                  }}
+                  className="px-3 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>AI Camera Verifier</span>
+                </button>
+                <button
+                  onClick={() => {
+                    sound.playClick();
+                    onClose();
+                    onNavigate('battle');
+                  }}
+                  className="px-3 py-1 rounded-full bg-orange-500/20 border border-orange-500/40 text-orange-300 hover:bg-orange-500/30 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <Flame className="w-3.5 h-3.5" />
+                  <span>60s Battle Arena</span>
+                </button>
+                {['Відтискання', 'DISPUTED', 'Liveness', 'Solana', 'Battle'].map((sample) => (
                   <button
                     key={sample}
                     onClick={() => setQuery(sample)}
@@ -216,6 +274,44 @@ export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
             </div>
           ) : (
             <div className="space-y-6">
+              {/* Help & Verification Articles */}
+              {(selectedCategory === 'all' || selectedCategory === 'help') && results.help.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-400">
+                    <HelpCircle className="w-3.5 h-3.5" />
+                    Довідка та Верифікація ({results.help.length})
+                  </div>
+                  <div className="space-y-2">
+                    {results.help.map((art) => (
+                      <div
+                        key={art.id}
+                        onClick={() => {
+                          sound.playClick();
+                          onNavigate('help', art);
+                          onClose();
+                        }}
+                        className="p-3 rounded-xl bg-neutral-950/80 border border-neutral-800 hover:border-amber-500/50 hover:bg-neutral-800/60 transition-all cursor-pointer group flex items-start justify-between"
+                      >
+                        <div className="space-y-1 pr-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-white group-hover:text-amber-300 transition-colors">
+                              {art.title}
+                            </span>
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono font-bold">
+                              {art.section}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-neutral-400 line-clamp-2">
+                            {art.body}
+                          </div>
+                        </div>
+                        <ArrowRight className="w-3.5 h-3.5 text-neutral-600 group-hover:text-amber-400 transition-colors shrink-0 mt-1" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Exercises */}
               {(selectedCategory === 'all' || selectedCategory === 'exercises') && results.exercises.length > 0 && (
                 <div className="space-y-2">
@@ -234,11 +330,20 @@ export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
                         }}
                         className="p-3 rounded-xl bg-neutral-950/80 border border-neutral-800 hover:border-amber-500/50 hover:bg-neutral-800/60 transition-all cursor-pointer group flex items-start justify-between"
                       >
-                        <div>
-                          <div className="text-xs font-bold text-white group-hover:text-amber-300 transition-colors">
-                            {ex.name}
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-bold text-white group-hover:text-amber-300 transition-colors">
+                              {ex.name}
+                            </span>
+                            {/* Point 4: Camera Verified badge if cameraVerifierId is present */}
+                            {ex.cameraVerifierId && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono">
+                                <Camera className="w-3 h-3 text-emerald-400" />
+                                <span>Camera Verified</span>
+                              </span>
+                            )}
                           </div>
-                          <div className="flex items-center gap-2 mt-1 text-[11px] text-neutral-400">
+                          <div className="flex items-center gap-2 text-[11px] text-neutral-400">
                             <span className="capitalize">{ex.muscle}</span>
                             <span>•</span>
                             <span className="capitalize">{ex.difficulty}</span>
@@ -253,8 +358,8 @@ export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
                 </div>
               )}
 
-              {/* Academy */}
-              {(selectedCategory === 'all' || selectedCategory === 'academy') && results.academy.length > 0 && (
+              {/* Parked: Academy */}
+              {parkedEnabled && (selectedCategory === 'all' || selectedCategory === 'academy') && results.academy.length > 0 && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-cyan-400">
                     <GraduationCap className="w-3.5 h-3.5" />
@@ -289,8 +394,8 @@ export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
                 </div>
               )}
 
-              {/* Wiki */}
-              {(selectedCategory === 'all' || selectedCategory === 'wiki') && results.wiki.length > 0 && (
+              {/* Parked: Wiki */}
+              {parkedEnabled && (selectedCategory === 'all' || selectedCategory === 'wiki') && results.wiki.length > 0 && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-400">
                     <BookOpen className="w-3.5 h-3.5" />
@@ -327,8 +432,8 @@ export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
                 </div>
               )}
 
-              {/* Community */}
-              {(selectedCategory === 'all' || selectedCategory === 'community') && results.community.length > 0 && (
+              {/* Parked: Community */}
+              {parkedEnabled && (selectedCategory === 'all' || selectedCategory === 'community') && results.community.length > 0 && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-blue-400">
                     <MessageSquare className="w-3.5 h-3.5" />
@@ -360,8 +465,8 @@ export const SmartSearchModal: React.FC<SmartSearchModalProps> = ({
                 </div>
               )}
 
-              {/* Challenges */}
-              {(selectedCategory === 'all' || selectedCategory === 'challenges') && results.challenges.length > 0 && (
+              {/* Parked: Challenges */}
+              {parkedEnabled && (selectedCategory === 'all' || selectedCategory === 'challenges') && results.challenges.length > 0 && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-orange-400">
                     <Target className="w-3.5 h-3.5" />

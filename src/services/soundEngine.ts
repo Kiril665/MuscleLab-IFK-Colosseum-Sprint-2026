@@ -5,7 +5,7 @@
 
 class SoundEngine {
   private ctx: AudioContext | null = null;
-  private isMuted: boolean = false;
+  private _isMuted: boolean = false;
   private masterGain: GainNode | null = null;
   private volume: number = 0.75;
   private ambientOsc: OscillatorNode | null = null;
@@ -16,7 +16,7 @@ class SoundEngine {
     if (typeof window !== 'undefined') {
       const savedMute = localStorage.getItem('forgemuscle_muted');
       if (savedMute !== null) {
-        this.isMuted = savedMute === 'true';
+        this._isMuted = savedMute === 'true';
       }
       const savedVol = localStorage.getItem('forgemuscle_volume');
       if (savedVol !== null) {
@@ -35,7 +35,7 @@ class SoundEngine {
       if (AudioCtx) {
         this.ctx = new AudioCtx();
         this.masterGain = this.ctx.createGain();
-        this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : this.volume, this.ctx.currentTime);
+        this.masterGain.gain.setValueAtTime(this._isMuted ? 0 : this.volume, this.ctx.currentTime);
         this.masterGain.connect(this.ctx.destination);
       }
     }
@@ -45,21 +45,25 @@ class SoundEngine {
   }
 
   public toggleMute(): boolean {
-    this.isMuted = !this.isMuted;
+    this._isMuted = !this._isMuted;
     if (typeof window !== 'undefined') {
-      localStorage.setItem('forgemuscle_muted', String(this.isMuted));
+      localStorage.setItem('forgemuscle_muted', String(this._isMuted));
     }
     if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : this.volume, this.ctx.currentTime);
+      this.masterGain.gain.setValueAtTime(this._isMuted ? 0 : this.volume, this.ctx.currentTime);
     }
-    if (this.isMuted && this.isAmbientPlaying) {
+    if (this._isMuted && this.isAmbientPlaying) {
       this.stopAmbient();
     }
-    return this.isMuted;
+    return this._isMuted;
   }
 
   public getIsMuted(): boolean {
-    return this.isMuted;
+    return this._isMuted;
+  }
+
+  public isMuted(): boolean {
+    return this._isMuted;
   }
 
   public setVolume(val: number) {
@@ -67,7 +71,7 @@ class SoundEngine {
     if (typeof window !== 'undefined') {
       localStorage.setItem('forgemuscle_volume', String(this.volume));
     }
-    if (this.masterGain && this.ctx && !this.isMuted) {
+    if (this.masterGain && this.ctx && !this._isMuted) {
       this.masterGain.gain.setValueAtTime(this.volume, this.ctx.currentTime);
     }
   }
@@ -245,7 +249,7 @@ class SoundEngine {
   }
 
   /**
-   * Coach Arno whistle / cheer cue
+   * Athletic whistle cue for start/stop/alerts
    */
   public playCoachWhistle() {
     if (this.isMuted) return;
@@ -278,42 +282,11 @@ class SoundEngine {
   }
 
   /**
-   * Expressive vocalized coach cue (melodic formant synth)
-   * Plays a distinct vocalized harmonic motif to signal coach speech
+   * Short neutral athletic chime
    */
   public playCoachVocalCue() {
-    if (this.isMuted) return;
-    this.initCtx();
-    if (!this.ctx || !this.masterGain) return;
-
-    const t = this.ctx.currentTime;
-    // Vocal notes: upbeat athletic fanfare
-    const notes = [293.66, 369.99, 440.0]; // D4, F#4, A4
-    notes.forEach((freq, idx) => {
-      if (!this.ctx || !this.masterGain) return;
-      const startTime = t + idx * 0.08;
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      const filter = this.ctx.createBiquadFilter();
-
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(freq, startTime);
-
-      // Vocal formant filter
-      filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(1000, startTime);
-      filter.Q.setValueAtTime(3.5, startTime);
-
-      gain.gain.setValueAtTime(0.18, startTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.14);
-
-      osc.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.masterGain);
-
-      osc.start(startTime);
-      osc.stop(startTime + 0.15);
-    });
+    // Neutral alert chime without speech formant
+    this.playClick();
   }
 
   /**

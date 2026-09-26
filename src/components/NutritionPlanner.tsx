@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Discipline, GoalType } from '../types';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 import { 
   Utensils, 
   Flame, 
@@ -19,7 +18,7 @@ import {
   Dumbbell, 
   Layers, 
   RotateCcw,
-  Volume2
+  Info
 } from 'lucide-react';
 
 interface FoodLogItem {
@@ -162,12 +161,12 @@ export const NutritionPlanner: React.FC<NutritionPlannerProps> = ({ userDiscipli
   const consumedCarbs = logs.reduce((acc, item) => acc + item.carbs, 0);
   const consumedFats = logs.reduce((acc, item) => acc + item.fats, 0);
 
-  // Handle Voice Advice
-  const handleArnoNutritionAdvice = () => {
+  const [showAdvice, setShowAdvice] = useState<boolean>(false);
+
+  // Handle Advice Toggle
+  const handleToggleAdvice = () => {
     sound.playClick();
-    const deficitOrSurplus = goal === 'hypertrophy' ? 'профіцит у триста пʼятдесят калорій' : 'дефіцит калорій для рельєфу';
-    const speech = `Слухай установку по раціону: Твоя норма білка — ${targetProteinGrams} грамів. Загальний калораж — ${targetCalories} кілокалорій. Дотримуйся правила: ${deficitOrSurplus}, пий не менше трьох літрів чистої води та спи вісім годин!`;
-    arnoVoice.speak(speech, { force: true });
+    setShowAdvice(!showAdvice);
   };
 
   // Add Item to log
@@ -241,14 +240,37 @@ export const NutritionPlanner: React.FC<NutritionPlannerProps> = ({ userDiscipli
 
           <div className="flex flex-col sm:flex-row gap-3 shrink-0">
             <button
-              onClick={handleArnoNutritionAdvice}
+              onClick={handleToggleAdvice}
               className="px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs flex items-center gap-2 shadow-[0_0_15px_rgba(245,158,11,0.4)] transition-all cursor-pointer font-heading"
             >
-              <Volume2 className="w-4 h-4" />
-              Порада Арно по їжі
+              <Info className="w-4 h-4" />
+              {showAdvice ? 'Сховати поради' : 'Поради по раціону'}
             </button>
           </div>
         </div>
+
+        {showAdvice && (
+          <div className="mt-6 pt-6 border-t border-amber-500/20 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <div className="p-3.5 rounded-2xl bg-neutral-950/80 border border-amber-500/30">
+              <span className="text-amber-400 font-bold block mb-1">🎯 Цільова норма білка:</span>
+              <p className="text-neutral-300">
+                {targetProteinGrams} г/день (близько {(targetProteinGrams / (weight || 1)).toFixed(1)} г на кг маси тіла) для активного синтезу мʼязового білка.
+              </p>
+            </div>
+            <div className="p-3.5 rounded-2xl bg-neutral-950/80 border border-amber-500/30">
+              <span className="text-amber-400 font-bold block mb-1">🔥 Енергетичний баланс:</span>
+              <p className="text-neutral-300">
+                {targetCalories} ккал ({goal === 'hypertrophy' ? 'профіцит +350 ккал для гіпертрофії' : goal === 'recomp' ? 'підтримка/невеликий дефіцит' : 'оптимальний баланс'}).
+              </p>
+            </div>
+            <div className="p-3.5 rounded-2xl bg-neutral-950/80 border border-amber-500/30">
+              <span className="text-amber-400 font-bold block mb-1">💧 Гідратація та відновлення:</span>
+              <p className="text-neutral-300">
+                Не менше {targetWaterLiters} л чистої води щодня та 7-8 годин якісного сну для росту сили.
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tabs Navigation */}

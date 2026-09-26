@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 import confetti from 'canvas-confetti';
 import { 
   Camera, 
@@ -16,8 +15,11 @@ import {
   Volume2, 
   VolumeX, 
   Sparkles,
-  CheckCircle2
+  CheckCircle2,
+  ShieldCheck
 } from 'lucide-react';
+import { useCameraVerifier } from '../hooks/useCameraVerifier';
+import { analyticsTracker } from '../services/analyticsTracker';
 
 interface BattleCameraDuelProps {
   userTeam: 'bodybuilding' | 'calisthenics';
@@ -43,28 +45,15 @@ export const BattleCameraDuel: React.FC<BattleCameraDuelProps> = ({
   // Timer
   const [timeLeft, setTimeLeft] = useState<number>(45);
 
-  // Camera & Tracking state
-  const [cameraStatus, setCameraStatus] = useState<'idle' | 'active' | 'error' | 'simulation'>('idle');
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isVoiceOn, setIsVoiceOn] = useState<boolean>(true);
+  const [isMuted, setIsMuted] = useState<boolean>(sound.getIsMuted());
   const [lastFeedback, setLastFeedback] = useState<string>('Прийміть вихідне положення перед камерою');
-  const [romPercent, setRomPercent] = useState<number>(0);
   const [repFlash, setRepFlash] = useState<boolean>(false);
 
-  // Refs for tracking
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const animFrameRef = useRef<number | null>(null);
-  const prevFrameDataRef = useRef<Uint8ClampedArray | null>(null);
-  const motionPhaseRef = useRef<'down' | 'up'>('up');
-  const lastRepTimeRef = useRef<number>(0);
-  const recentYPositionsRef = useRef<number[]>([]);
   const duelTimerRef = useRef<NodeJS.Timeout | null>(null);
   const rivalIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const rivalTeam = userTeam === 'bodybuilding' ? 'calisthenics' : 'bodybuilding';
-  const rivalName = userTeam === 'bodybuilding' ? 'Турнікмен Тарас' : 'Залізний Віктор';
+  const rivalName = userTeam === 'bodybuilding' ? 'Суперник (Калістеніка)' : 'Суперник (Бодибілдинг)';
   const userTeamName = userTeam === 'bodybuilding' ? 'Бодибілдинг' : 'Калістеніка';
   const rivalTeamName = rivalTeam === 'bodybuilding' ? 'Бодибілдинг' : 'Калістеніка';
 
@@ -72,159 +61,11 @@ export const BattleCameraDuel: React.FC<BattleCameraDuelProps> = ({
   const repDiff = userReps - rivalReps;
   const ropeShiftPercent = Math.max(10, Math.min(90, 50 + repDiff * 4));
 
-  // Stop camera stream safely
-  const stopCameraStream = useCallback(() => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => {
-        try {
-          track.stop();
-        } catch {
-          // ignore
-        }
-      });
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-  }, []);
-
-  // Initialize camera
-  const startCamera = useCallback(async () => {
-    setCameraStatus('idle');
-    setErrorMessage(null);
-
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setCameraStatus('simulation');
-      return;
-    }
-
-    try {
-      stopCameraStream();
-
-      let stream: MediaStream | null = null;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 320 },
-            height: { ideal: 240 },
-            facingMode: 'user'
-          },
-          audio: false
-        });
-      } catch {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'user' },
-            audio: false
-          });
-        } catch {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: false
-          });
-        }
-      }
-
-      if (!stream) {
-        throw new Error('Не вдалося ініціалізувати веб-камеру.');
-      }
-
-      streamRef.current = stream;
-      if (videoRef.current) {
-        const vid = videoRef.current;
-        vid.srcObject = stream;
-        await new Promise<void>((resolve) => {
-          let resolved = false;
-          const done = () => {
-            if (!resolved) {
-              resolved = true;
-              resolve();
-            }
-          };
-          vid.onloadedmetadata = done;
-          vid.onloadeddata = done;
-          vid.play().then(done).catch(done);
-          setTimeout(done, 1000);
-        });
-      }
-      setCameraStatus('active');
-    } catch (err: unknown) {
-      console.warn('Camera access denied or failed, switching to AI simulation:', err);
-      setCameraStatus('simulation');
-      setErrorMessage('Камера недоступна або доступ відхилено. Активовано режим AI-симуляції.');
-    }
-  }, [stopCameraStream]);
-
-  // Clean up on unmount
-  useEffect(() => {
-    return () => {
-      stopCameraStream();
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
-      }
-      if (duelTimerRef.current) clearInterval(duelTimerRef.current);
-      if (rivalIntervalRef.current) clearInterval(rivalIntervalRef.current);
-    };
-  }, [stopCameraStream]);
-
-  // Handle start duel
-  const handleStartDuel = async () => {
-    setUserReps(0);
-    setRivalReps(0);
-    setWinner(null);
-    setTimeLeft(duelMode === 'blitz45' ? 45 : 60);
-    setGameState('active');
-    sound.playAnvilHit();
-
-    await startCamera();
-
-    arnoVoice.speak(
-      `Батл розпочато! Твоя команда — ${userTeamName}. Роби ${
-        exerciseType === 'pushups' ? 'відтискання від підлоги' : 'присідання'
-      } перед камерою і тягни ланцюг!`,
-      { force: true }
-    );
-  };
-
-  // Register physical rep from camera hands-free
-  const handleRegisterUserRep = useCallback(() => {
-    sound.playChainTug();
-    setRepFlash(true);
-    setTimeout(() => setRepFlash(false), 200);
-
-    setUserReps((prev) => {
-      const next = prev + 1;
-      onRepCompleted(userTeam, next, 30);
-
-      // Arno motivational commentary
-      if (next === 1) {
-        setLastFeedback('🔥 Перше чисто! Тягни ланцюг!');
-      } else if (next === 5) {
-        arnoVoice.speak('Пʼять повторень! Залізна техніка, так тримати!');
-        setLastFeedback('⚡ 5 повторів! Опонент відчуває тиск!');
-      } else if (next === 10) {
-        arnoVoice.speak('Десять! Ланцюг тріщить на нашу користь!');
-        setLastFeedback('💥 10 повторів! Вириваєш перемогу!');
-      } else {
-        setLastFeedback(`✅ Повторення #${next} зараховано!`);
-      }
-
-      // Check first to 15 win condition
-      if (duelMode === 'first15' && next >= 15) {
-        finishDuel('user');
-      }
-
-      return next;
-    });
-  }, [userTeam, onRepCompleted, duelMode]);
-
   // Finish duel helper
   const finishDuel = useCallback((forcedWinner?: 'user' | 'rival' | 'draw') => {
     setGameState('finished');
     if (duelTimerRef.current) clearInterval(duelTimerRef.current);
     if (rivalIntervalRef.current) clearInterval(rivalIntervalRef.current);
-    stopCameraStream();
 
     let finalWinner: 'user' | 'rival' | 'draw' = 'draw';
     if (forcedWinner) {
@@ -236,6 +77,12 @@ export const BattleCameraDuel: React.FC<BattleCameraDuelProps> = ({
     }
 
     setWinner(finalWinner);
+    analyticsTracker.track('battle_complete', {
+      exerciseType,
+      winner: finalWinner,
+      userReps,
+      rivalReps
+    });
 
     if (finalWinner === 'user') {
       sound.playLevelUp();
@@ -248,35 +95,105 @@ export const BattleCameraDuel: React.FC<BattleCameraDuelProps> = ({
       } catch {
         // ignore
       }
-      arnoVoice.speak(
-        `Перемога! Твої повторення схилили шальки терезів на користь ${userTeamName}! Справжній титан!`,
-        { force: true }
-      );
     } else if (finalWinner === 'rival') {
-      arnoVoice.speak(
-        `Раунд за опонентом! Не опускай руки, віднови дихання та бери реванш!`,
-        { force: true }
-      );
+      sound.playGong();
     } else {
-      arnoVoice.speak('Нічия! Сили абсолютно рівні, це була запекла битва!');
+      sound.playAnvilHit();
     }
-  }, [userReps, rivalReps, stopCameraStream, userTeamName]);
+  }, [userReps, rivalReps, exerciseType]);
 
-  // Opponent AI rep generator (simulates human adversary repping every ~3.2 - 3.8s)
+  // Register physical rep from unified Camera Verifier hands-free
+  const handleRegisterUserRep = useCallback(() => {
+    sound.playChainTug();
+    setRepFlash(true);
+    setTimeout(() => setRepFlash(false), 200);
+
+    setUserReps((prev) => {
+      const next = prev + 1;
+      onRepCompleted(userTeam, next, 30);
+
+      // Visual feedback
+      if (next === 1) {
+        setLastFeedback('🔥 Перше чисто! Тягни ланцюг!');
+      } else if (next === 5) {
+        setLastFeedback('⚡ 5 повторів! Опонент відчуває тиск!');
+      } else if (next === 10) {
+        setLastFeedback('💥 10 повторів! Вириваєш перемогу!');
+      } else {
+        setLastFeedback(`✅ Повторення #${next} зараховано!`);
+      }
+
+      // Check first to 15 win condition
+      if (duelMode === 'first15' && next >= 15) {
+        finishDuel('user');
+      }
+
+      return next;
+    });
+  }, [userTeam, onRepCompleted, duelMode, finishDuel]);
+
+  // Biomechanical rejection feedback
+  const handleRepRejected = useCallback((reason: string) => {
+    setLastFeedback(`⚠️ Помилка форми: ${reason}`);
+  }, []);
+
+  // Use the unified camera verifier hook
+  const {
+    videoRef,
+    canvasRef,
+    cameraStatus,
+    errorMessage,
+    currentRomPercent,
+    startCamera,
+    stopCamera,
+    setExercise: setVerifierExercise,
+    resetCounters
+  } = useCameraVerifier({
+    exerciseId: exerciseType === 'pushups' ? 'push_up' : 'squat',
+    onRep: handleRegisterUserRep,
+    onReject: handleRepRejected
+  });
+
+  // Keep verifier exercise synced
   useEffect(() => {
-    if (gameState !== 'active') return;
+    setVerifierExercise(exerciseType === 'pushups' ? 'push_up' : 'squat');
+  }, [exerciseType, setVerifierExercise]);
+
+  // Handle start duel
+  const handleStartDuel = async () => {
+    setUserReps(0);
+    setRivalReps(0);
+    setWinner(null);
+    setTimeLeft(duelMode === 'blitz45' ? 45 : 60);
+    setGameState('active');
+    resetCounters();
+    sound.playAnvilHit();
+    analyticsTracker.track('battle_start', { exerciseType, duelMode });
+
+    await startCamera();
+  };
+
+  // AI rival progression interval
+  useEffect(() => {
+    if (gameState !== 'active') {
+      if (rivalIntervalRef.current) clearInterval(rivalIntervalRef.current);
+      return;
+    }
 
     const scheduleNextRivalRep = () => {
-      const delay = 2800 + Math.random() * 1400; // Realistic human interval
+      // Rival reps every 3.2 - 4.5 seconds with slight variance
+      const delay = Math.floor(Math.random() * 1300) + 3200;
       rivalIntervalRef.current = setTimeout(() => {
         setRivalReps((prev) => {
           const next = prev + 1;
           onRepCompleted(rivalTeam, next, 25);
+
           if (duelMode === 'first15' && next >= 15) {
             finishDuel('rival');
           }
           return next;
         });
+
         if (gameState === 'active') {
           scheduleNextRivalRep();
         }
@@ -309,185 +226,6 @@ export const BattleCameraDuel: React.FC<BattleCameraDuelProps> = ({
     };
   }, [gameState, duelMode, finishDuel]);
 
-  // --- COMPUTER VISION KINEMATIC LOOP FOR LIVE WEBCAM & SIMULATION ---
-  useEffect(() => {
-    if (gameState !== 'active') {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-      return;
-    }
-
-    const processDuelFrame = () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return;
-
-      const width = 320;
-      const height = 240;
-      if (canvas.width !== width) canvas.width = width;
-      if (canvas.height !== height) canvas.height = height;
-
-      const video = videoRef.current;
-      const isRealCam = cameraStatus === 'active' && video && video.readyState >= 2;
-
-      if (isRealCam && video) {
-        // Draw real webcam mirror
-        ctx.save();
-        ctx.translate(width, 0);
-        ctx.scale(-1, 1);
-        ctx.drawImage(video, 0, 0, width, height);
-        ctx.restore();
-
-        try {
-          const frame = ctx.getImageData(0, 0, width, height);
-          const data = frame.data;
-
-          if (prevFrameDataRef.current && prevFrameDataRef.current.length === data.length) {
-            let sumX = 0;
-            let sumY = 0;
-            let motionPixels = 0;
-            let minX = width;
-            let maxX = 0;
-            let minY = height;
-            let maxY = 0;
-
-            for (let i = 0; i < data.length; i += 16) {
-              const diff =
-                Math.abs(data[i] - prevFrameDataRef.current[i]) +
-                Math.abs(data[i + 1] - prevFrameDataRef.current[i + 1]) +
-                Math.abs(data[i + 2] - prevFrameDataRef.current[i + 2]);
-
-              if (diff > 80) {
-                const pxIdx = i / 4;
-                const x = pxIdx % width;
-                const y = Math.floor(pxIdx / width);
-
-                sumX += x;
-                sumY += y;
-                motionPixels++;
-
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
-                if (y < minY) minY = y;
-                if (y > maxY) maxY = y;
-              }
-            }
-
-            if (motionPixels > 130) {
-              const centroidX = sumX / motionPixels;
-              const centroidY = sumY / motionPixels;
-              const boxW = Math.max(1, maxX - minX);
-              const boxH = Math.max(1, maxY - minY);
-              const aspectRatio = boxW / boxH;
-              const groundProximity = centroidY / height;
-
-              // Sliding envelope tracking (adaptive floor & standing)
-              recentYPositionsRef.current.push(centroidY);
-              if (recentYPositionsRef.current.length > 35) {
-                recentYPositionsRef.current.shift();
-              }
-
-              const recentYs = recentYPositionsRef.current;
-              const dynMinY = Math.min(...recentYs);
-              const dynMaxY = Math.max(...recentYs);
-              const dynAmp = Math.max(1, dynMaxY - dynMinY);
-
-              const isPushupMode = exerciseType === 'pushups' || (aspectRatio > 1.05 && groundProximity > 0.4);
-              const rom = Math.min(100, Math.max(0, Math.round(((centroidY - dynMinY) / Math.max(12, dynAmp)) * 100)));
-              setRomPercent(rom);
-
-              // Down / Up trigger logic
-              const now = Date.now();
-              const minAmp = isPushupMode ? 14 : 20;
-              const downTrigger = dynMinY + Math.max(minAmp, dynAmp * 0.52);
-              const upTrigger = dynMinY + Math.max(6, dynAmp * 0.24);
-
-              if (centroidY > downTrigger && motionPhaseRef.current === 'up') {
-                motionPhaseRef.current = 'down';
-              } else if (centroidY < upTrigger && motionPhaseRef.current === 'down') {
-                if (now - lastRepTimeRef.current > 650) {
-                  motionPhaseRef.current = 'up';
-                  lastRepTimeRef.current = now;
-                  handleRegisterUserRep();
-                }
-              }
-
-              // Draw HUD box & markers
-              ctx.strokeStyle = userTeam === 'bodybuilding' ? '#f59e0b' : '#06b6d4';
-              ctx.lineWidth = 2;
-              ctx.strokeRect(minX, minY, boxW, boxH);
-
-              // Center crosshair
-              ctx.fillStyle = '#22c55e';
-              ctx.beginPath();
-              ctx.arc(centroidX, centroidY, 6, 0, Math.PI * 2);
-              ctx.fill();
-
-              // Top Live Status Pill
-              ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-              ctx.fillRect(10, 10, 200, 26);
-              ctx.fillStyle = '#ffffff';
-              ctx.font = 'bold 11px sans-serif';
-              ctx.fillText(
-                motionPhaseRef.current === 'down' ? '⬇ ОПУСКАННЯ' : '⬆ ВИШТОВХУВАННЯ',
-                20,
-                27
-              );
-
-              // Rep Count pill
-              ctx.fillStyle = userTeam === 'bodybuilding' ? '#f59e0b' : '#06b6d4';
-              ctx.fillRect(width - 90, 10, 80, 26);
-              ctx.fillStyle = '#000000';
-              ctx.font = 'bold 12px sans-serif';
-              ctx.fillText(`РЕПИ: ${userReps}`, width - 82, 28);
-            }
-          }
-
-          prevFrameDataRef.current = new Uint8ClampedArray(data);
-        } catch {
-          // ignore
-        }
-      } else {
-        // AI Simulated Athlete Canvas (Fallback)
-        ctx.fillStyle = '#09090b';
-        ctx.fillRect(0, 0, width, height);
-
-        // Tech grid
-        ctx.strokeStyle = '#18181b';
-        ctx.lineWidth = 1;
-        for (let x = 0; x < width; x += 30) {
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, height);
-          ctx.stroke();
-        }
-
-        const t = Date.now() / 600;
-        const repCycle = (Math.sin(t) + 1) / 2;
-        setRomPercent(Math.round(repCycle * 100));
-
-        // Simulated wireframe athlete
-        ctx.strokeStyle = userTeam === 'bodybuilding' ? '#f59e0b' : '#06b6d4';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(160, 80 + repCycle * 25, 14, 0, Math.PI * 2);
-        ctx.stroke();
-
-        ctx.fillStyle = '#a1a1aa';
-        ctx.font = '11px sans-serif';
-        ctx.fillText('AI-СИМУЛЯТОР РУХУ (БЕЗ ВЕБКАМЕРИ)', 45, 190);
-        ctx.fillText('Або натисніть ПРОБІЛ для ручного повтору', 40, 210);
-      }
-
-      animFrameRef.current = requestAnimationFrame(processDuelFrame);
-    };
-
-    animFrameRef.current = requestAnimationFrame(processDuelFrame);
-    return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    };
-  }, [gameState, cameraStatus, exerciseType, userTeam, userReps, handleRegisterUserRep]);
-
   // Spacebar fallback listener for accessibility
   useEffect(() => {
     if (gameState !== 'active') return;
@@ -501,6 +239,15 @@ export const BattleCameraDuel: React.FC<BattleCameraDuelProps> = ({
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   }, [gameState, handleRegisterUserRep]);
+
+  // Clean up on component unmount
+  useEffect(() => {
+    return () => {
+      stopCamera();
+      if (duelTimerRef.current) clearInterval(duelTimerRef.current);
+      if (rivalIntervalRef.current) clearTimeout(rivalIntervalRef.current);
+    };
+  }, [stopCamera]);
 
   return (
     <div className="rounded-3xl border border-neutral-800 bg-neutral-950 p-6 sm:p-8 space-y-6 shadow-2xl relative overflow-hidden">
@@ -517,56 +264,86 @@ export const BattleCameraDuel: React.FC<BattleCameraDuelProps> = ({
           </div>
           <div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-white font-heading">
-              КАМЕРА-БАТЛ: ЖИВИЙ ДУЕЛЬ-РАУНД
+              КАМЕРА-БАТЛ: ВЕРИФІКОВАНА ДУЕЛЬ
             </h2>
-            <p className="text-xs text-neutral-400 font-sans">
-              Без кнопок! Вебкамера фіксує кожне твоє фізичне повторення і перетягує ланцюг у прямому ефірі.
+            <p className="text-xs text-neutral-400 font-sans mt-0.5">
+              Pose Verifier фіксує лише чисті повторення. Тягни ланцюг за свою команду!
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Sound FX Toggle */}
           <button
+            type="button"
             onClick={() => {
-              const state = arnoVoice.toggleVoice();
-              setIsVoiceOn(state);
+              const muted = sound.toggleMute();
+              setIsMuted(muted);
             }}
-            className="p-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white transition-all cursor-pointer"
-            title={isVoiceOn ? 'Вимкнути голос Арно' : 'Увімкнути голос Арно'}
+            className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
+              !isMuted 
+                ? 'bg-amber-500/20 border-amber-500/50 text-amber-300' 
+                : 'bg-neutral-900 border-neutral-800 text-neutral-400'
+            }`}
+            title={!isMuted ? 'Вимкнути звукові ефекти' : 'Увімкнути звукові ефекти'}
           >
-            {isVoiceOn ? <Volume2 className="w-4 h-4 text-amber-400" /> : <VolumeX className="w-4 h-4" />}
+            {!isMuted ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
 
+          {/* Close button */}
           <button
-            onClick={onClose}
-            className="p-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-white transition-all cursor-pointer"
-            title="Закрити батл"
+            type="button"
+            onClick={() => {
+              stopCamera();
+              onClose();
+            }}
+            className="p-2.5 rounded-xl border border-neutral-800 hover:border-neutral-700 bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-white transition-all cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
       </div>
 
-      {/* LIVE TUG-OF-WAR CHAIN VISUALIZER */}
-      <div className="bg-neutral-900/80 rounded-2xl p-5 border border-neutral-800 space-y-3">
-        <div className="flex justify-between items-center text-sm font-bold font-heading">
-          <div className="flex items-center gap-2 text-amber-400">
-            <Dumbbell className="w-4 h-4" />
-            <span>ТИ: {userReps} репів ({userTeamName})</span>
+      {/* Sponsor Challenge Notice */}
+      <div className="p-3 rounded-2xl bg-neutral-900/60 border border-amber-500/20 flex items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-2 text-neutral-300">
+          <ShieldCheck className="w-4 h-4 text-amber-400 flex-shrink-0" />
+          <span>
+            <strong className="text-white">Sponsor Challenge:</strong> Призовий пул $500 від GymBeam & Solana Devnet за верифіковані репи. Без P2P ставок!
+          </span>
+        </div>
+        <span className="hidden sm:inline-block px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 font-bold text-[10px] uppercase border border-amber-500/30">
+          100% Fair Play
+        </span>
+      </div>
+
+      {/* TUG-OF-WAR CHAIN VISUALIZER */}
+      <div className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-4 sm:p-5 space-y-3">
+        <div className="flex items-center justify-between text-xs sm:text-sm font-bold uppercase tracking-wider font-heading">
+          {/* User side */}
+          <div className="flex items-center gap-2">
+            <span className={userTeam === 'bodybuilding' ? 'text-amber-400' : 'text-cyan-400'}>
+              ТИ ({userTeamName})
+            </span>
+            <span className="px-2 py-0.5 rounded-lg bg-neutral-800 text-white font-mono text-sm">
+              {userReps} репів
+            </span>
           </div>
 
-          <div className="flex items-center gap-1 text-xs text-neutral-400 font-mono">
-            <Timer className="w-4 h-4 text-amber-400" />
-            {duelMode === 'blitz45' ? (
-              <span>Час: <strong className="text-white text-sm">{timeLeft}с</strong></span>
-            ) : (
-              <span>Ціль: <strong className="text-white text-sm">15 репів</strong></span>
-            )}
+          {/* Timer display */}
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-neutral-950 border border-neutral-700 text-amber-400 font-mono text-xs">
+            <Timer className="w-3.5 h-3.5" />
+            <span>{duelMode === 'blitz45' ? `${timeLeft}s` : 'First to 15'}</span>
           </div>
 
-          <div className="flex items-center gap-2 text-cyan-400">
-            <span>{rivalName}: {rivalReps} репів</span>
-            <Activity className="w-4 h-4" />
+          {/* Rival side */}
+          <div className="flex items-center gap-2">
+            <span className="px-2 py-0.5 rounded-lg bg-neutral-800 text-white font-mono text-sm">
+              {rivalReps} репів
+            </span>
+            <span className={rivalTeam === 'bodybuilding' ? 'text-amber-400' : 'text-cyan-400'}>
+              {rivalName}
+            </span>
           </div>
         </div>
 
@@ -595,7 +372,7 @@ export const BattleCameraDuel: React.FC<BattleCameraDuelProps> = ({
           {/* Glowing central ring/iron knot */}
           <div
             className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-8 h-8 rounded-full bg-neutral-950 border-2 border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.9)] flex items-center justify-center z-10 transition-all duration-300 ${
-              repFlash ? 'scale-135 ring-4 ring-amber-400' : ''
+              repFlash ? 'scale-125 ring-4 ring-amber-400' : ''
             }`}
             style={{ left: `${ropeShiftPercent}%` }}
           >
@@ -627,9 +404,9 @@ export const BattleCameraDuel: React.FC<BattleCameraDuelProps> = ({
                       : 'border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-white'
                   }`}
                 >
-                  🤸‍♂️ Відтискання від підлоги
+                  🤸‍♂️ Відтискання
                   <span className="block text-[11px] font-normal text-neutral-400 mt-1 font-sans">
-                    Адаптивний трекер підлоги
+                    MediaPipe Plank & Lockout
                   </span>
                 </button>
 
@@ -644,7 +421,7 @@ export const BattleCameraDuel: React.FC<BattleCameraDuelProps> = ({
                 >
                   🏋️‍♂️ Присідання
                   <span className="block text-[11px] font-normal text-neutral-400 mt-1 font-sans">
-                    Повна амплітуда стегон
+                    Паралель стегон & випрямлення
                   </span>
                 </button>
               </div>
@@ -731,6 +508,8 @@ export const BattleCameraDuel: React.FC<BattleCameraDuelProps> = ({
             {/* Canvas with CV Kinematics HUD */}
             <canvas
               ref={canvasRef}
+              width={640}
+              height={480}
               className="w-full h-full object-cover"
             />
 
@@ -740,96 +519,153 @@ export const BattleCameraDuel: React.FC<BattleCameraDuelProps> = ({
                 {lastFeedback}
               </div>
             </div>
-          </div>
 
-          {/* Rival Side Panel */}
-          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-5 space-y-4 flex flex-col justify-between">
-            <div className="text-center space-y-2">
-              <div className="w-16 h-16 mx-auto rounded-full bg-cyan-500/20 border-2 border-cyan-400 flex items-center justify-center text-2xl animate-pulse">
-                {rivalTeam === 'bodybuilding' ? '🏋️‍♂️' : '🤸‍♂️'}
-              </div>
-              <h4 className="text-lg font-bold text-white font-heading">
-                {rivalName}
-              </h4>
-              <div className="text-2xl font-black text-cyan-400 font-mono">
-                {rivalReps} РЕПІВ
-              </div>
-              <div className="w-full bg-neutral-800 h-2 rounded-full overflow-hidden">
+            {/* Amplitude gauge overlay */}
+            <div className="absolute top-3 left-3 flex items-center gap-2 bg-neutral-950/80 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-neutral-800 text-xs">
+              <span className="text-neutral-400 font-bold">ROM:</span>
+              <div className="w-20 bg-neutral-800 h-2 rounded-full overflow-hidden">
                 <div 
-                  className="bg-cyan-400 h-full transition-all duration-300"
-                  style={{ width: `${Math.min(100, (rivalReps / (duelMode === 'first15' ? 15 : 20)) * 100)}%` }}
+                  className={`h-full transition-all duration-100 ${
+                    currentRomPercent >= 85 ? 'bg-emerald-500' : 'bg-amber-500'
+                  }`}
+                  style={{ width: `${currentRomPercent}%` }}
                 />
               </div>
+              <span className="font-mono text-white font-bold">{currentRomPercent}%</span>
             </div>
 
-            <div className="border-t border-neutral-800 pt-3 space-y-2 text-center">
-              <div className="text-xs text-neutral-400">Твій поточний рахунок:</div>
-              <div className="text-3xl font-black text-amber-400 font-mono">
-                {userReps} РЕПІВ
+            {cameraStatus === 'simulation' && (
+              <div className="absolute top-3 right-3 px-2 py-0.5 rounded bg-orange-600/90 text-white text-[10px] font-black uppercase tracking-wider">
+                AI Skeleton Fallback
               </div>
-              <p className="text-[11px] text-neutral-500">
-                Камера фіксує рух. Працюй в повній амплітуді!
-              </p>
+            )}
+          </div>
+
+          {/* Opponent & Stats Box (Takes 1 col) */}
+          <div className="space-y-4">
+            <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-5 space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-neutral-800 border border-neutral-700 flex items-center justify-center text-2xl">
+                  {rivalTeam === 'bodybuilding' ? '🏋️‍♂️' : '🤸‍♂️'}
+                </div>
+                <div>
+                  <h4 className="text-base font-bold text-white font-heading">
+                    {rivalName}
+                  </h4>
+                  <span className="text-xs text-neutral-400">
+                    Ритм: одне повторення кожні ~3.5с
+                  </span>
+                </div>
+              </div>
+
+              {/* Progress Bar of Rival */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-neutral-400 font-mono">
+                  <span>Суперник:</span>
+                  <span className="text-white font-bold">{rivalReps} репів</span>
+                </div>
+                <div className="w-full bg-neutral-950 h-2.5 rounded-full overflow-hidden p-0.5 border border-neutral-800">
+                  <div 
+                    className="bg-red-500 h-full rounded-full transition-all duration-300"
+                    style={{ width: `${Math.min(100, (rivalReps / (duelMode === 'first15' ? 15 : 20)) * 100)}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Progress Bar of User */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-neutral-400 font-mono">
+                  <span>Твій результат:</span>
+                  <span className="text-amber-400 font-bold">{userReps} репів</span>
+                </div>
+                <div className="w-full bg-neutral-950 h-2.5 rounded-full overflow-hidden p-0.5 border border-neutral-800">
+                  <div 
+                    className="bg-gradient-to-r from-amber-500 to-orange-500 h-full rounded-full transition-all duration-300"
+                    style={{ width: `${Math.min(100, (userReps / (duelMode === 'first15' ? 15 : 20)) * 100)}%` }}
+                  />
+                </div>
+              </div>
             </div>
 
+            {/* Accessibility fallback button (for when user cannot use camera) */}
             <button
-              onClick={() => finishDuel()}
-              className="w-full py-2 px-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white text-xs font-bold transition-all cursor-pointer font-heading"
+              type="button"
+              onClick={handleRegisterUserRep}
+              className="w-full py-2.5 px-4 rounded-xl border border-neutral-800 hover:border-neutral-700 bg-neutral-900/60 hover:bg-neutral-800 text-xs text-neutral-300 font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer"
             >
-              Завершити дуель достроково
+              <span>Зарахувати повторення вручну (Пробіл)</span>
+            </button>
+
+            {/* Give up button */}
+            <button
+              type="button"
+              onClick={() => finishDuel('rival')}
+              className="w-full py-2 text-xs text-neutral-500 hover:text-red-400 transition-colors text-center cursor-pointer"
+            >
+              Здатись у цьому раунді
             </button>
           </div>
         </div>
       )}
 
-      {/* FINISHED SUMMARY SCREEN */}
+      {/* FINISHED DUEL SCREEN */}
       {gameState === 'finished' && (
-        <div className="text-center py-8 space-y-6 max-w-lg mx-auto">
-          <div className="w-20 h-20 mx-auto rounded-full bg-amber-500/20 border-2 border-amber-400 flex items-center justify-center text-4xl shadow-[0_0_30px_rgba(245,158,11,0.5)]">
-            {winner === 'user' ? '🏆' : winner === 'draw' ? '🤝' : '⚔️'}
+        <div className="text-center py-8 space-y-6 max-w-lg mx-auto animate-in zoom-in-95 duration-300">
+          <div className="w-24 h-24 mx-auto rounded-3xl bg-gradient-to-tr from-amber-500/20 to-orange-500/20 border-2 border-amber-500/50 flex items-center justify-center text-5xl shadow-[0_0_40px_rgba(245,158,11,0.3)]">
+            {winner === 'user' ? '🏆' : winner === 'rival' ? '🥈' : '🤝'}
           </div>
 
-          <div className="space-y-1">
-            <h3 className="text-2xl sm:text-3xl font-black text-white font-heading">
+          <div className="space-y-2">
+            <span className="text-xs font-bold uppercase tracking-widest text-amber-400">
+              Поєдинок Завершено
+            </span>
+            <h3 className="text-3xl font-extrabold text-white font-heading">
               {winner === 'user' 
-                ? 'ТИ ПЕРЕМІГ У ДУЕЛІ!' 
-                : winner === 'draw' 
-                ? 'БОЙОВА НІЧИЯ!' 
-                : 'СУПЕРНИК БУВ ШВИДШИМ!'}
+                ? 'ПЕРЕМОГА! ЛАНЦЮГ ТВОЙ!' 
+                : winner === 'rival' 
+                  ? 'СУПЕРНИК БУВ СПРИТНІШИМ' 
+                  : 'БОЙОВА НІЧИЯ!'}
             </h3>
             <p className="text-sm text-neutral-300 font-sans">
-              {winner === 'user'
-                ? `Твої ${userReps} повторень принесли додаткові XP для команди ${userTeamName}!`
-                : `Ти виконав ${userReps} повторень, суперник — ${rivalReps}. Спробуй ще раз!`}
+              Ти виконав <strong className="text-amber-400">{userReps}</strong> верифікованих повторень проти{' '}
+              <strong className="text-neutral-400">{rivalReps}</strong> у {rivalName}.
             </p>
           </div>
 
-          {/* Stats Badges */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800">
-              <div className="text-xs text-neutral-400">Твої репи</div>
-              <div className="text-2xl font-black text-amber-400 mt-0.5">{userReps}</div>
+          <div className="grid grid-cols-2 gap-4 bg-neutral-900 p-4 rounded-2xl border border-neutral-800">
+            <div>
+              <span className="text-xs text-neutral-400">Твій рахунок</span>
+              <div className="text-2xl font-black text-amber-400 font-mono mt-0.5">
+                {userReps} репів
+              </div>
             </div>
-            <div className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800">
-              <div className="text-xs text-neutral-400">XP для команди</div>
-              <div className="text-2xl font-black text-green-400 mt-0.5">+{userReps * 30} XP</div>
+            <div>
+              <span className="text-xs text-neutral-400">Зароблено XP</span>
+              <div className="text-2xl font-black text-cyan-400 font-mono mt-0.5">
+                +{userReps * 30} XP
+              </div>
             </div>
           </div>
 
-          <div className="flex gap-3 justify-center pt-2">
+          <div className="flex flex-col sm:flex-row gap-3">
             <button
-              onClick={handleStartDuel}
-              className="py-3 px-6 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-sm flex items-center gap-2 cursor-pointer font-heading"
+              onClick={() => {
+                setGameState('ready');
+                setUserReps(0);
+                setRivalReps(0);
+                setWinner(null);
+              }}
+              className="flex-1 py-3.5 px-6 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-neutral-950 font-bold font-heading shadow-lg cursor-pointer flex items-center justify-center gap-2"
             >
               <RotateCcw className="w-4 h-4" />
-              Взяти реванш
+              РЕВАНШ (ЩЕ РАЗ)
             </button>
 
             <button
               onClick={onClose}
-              className="py-3 px-6 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-white font-bold text-sm cursor-pointer font-heading"
+              className="py-3.5 px-6 rounded-xl border border-neutral-800 hover:border-neutral-700 bg-neutral-900 hover:bg-neutral-800 text-white font-bold font-heading cursor-pointer"
             >
-              Повернутися до турніру
+              Закрити дуель
             </button>
           </div>
         </div>

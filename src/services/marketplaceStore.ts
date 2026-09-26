@@ -5,13 +5,12 @@ import {
   PartnerSponsorship
 } from '../types';
 import { sound } from './soundEngine';
-import { arnoVoice } from './arnoVoice';
 
 export const SEED_MARKETPLACE_PRODUCTS: MarketplaceProduct[] = [
   {
     id: 'prod_ppl_12week',
-    creatorId: 'user_maks',
-    creatorName: 'Максим «Титановий»',
+    creatorId: 'team_forge_bb',
+    creatorName: 'Forge Pro Division',
     creatorAvatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=120&h=120&fit=crop&crop=faces',
     title: '12-тижневий цикл Hypertrophy PPL (Push-Pull-Legs)',
     description: 'Систематизований науковий протокол прогресивного перевантаження для набору якісної мʼязової маси без перевантаження хребта.',
@@ -34,8 +33,8 @@ export const SEED_MARKETPLACE_PRODUCTS: MarketplaceProduct[] = [
   },
   {
     id: 'prod_planche_frontlever',
-    creatorId: 'user_taras',
-    creatorName: 'Тарас «Залізо»',
+    creatorId: 'team_forge_cali',
+    creatorName: 'Forge Calisthenics Lab',
     creatorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&h=120&fit=crop&crop=faces',
     title: 'Від нуля до Переднього Вису (Front Lever) та Горизонту',
     description: 'Покроковий атлетичний гайд зміцнення звʼязок ліктів, найширших та кора для складних статичних елементів калістеніки.',
@@ -58,8 +57,8 @@ export const SEED_MARKETPLACE_PRODUCTS: MarketplaceProduct[] = [
   },
   {
     id: 'prod_home_iron',
-    creatorId: 'user_artur',
-    creatorName: 'Артур_Новак',
+    creatorId: 'team_forge_home',
+    creatorName: 'Forge Home Fitness Lab',
     creatorAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&h=120&fit=crop&crop=faces',
     title: 'Домашній Атлет: Набір Маси з Парою Гантелей та Турніком',
     description: 'Повноцінна програма на випадок відсутності доступу до спортзалу. Максимальна віддача від мінімального простору.',
@@ -220,7 +219,6 @@ class MarketplaceStore {
     this.isPremiumUser = !this.isPremiumUser;
     this.save();
     sound.playLevelUp();
-    arnoVoice.speak(this.isPremiumUser ? 'Активовано Forge Premium! Усі розширені модулі та преміальні програми відкриті.' : 'Повернуто базовий статус.');
   }
 
   public purchaseProduct(productId: string): boolean {
@@ -233,7 +231,6 @@ class MarketplaceStore {
     this.forgePoints += 50; // Bonus points for supporting creator
     this.save();
     sound.playTrophy();
-    arnoVoice.speak(`Матеріал «${prod.title}» успішно додано до вашої бібліотеки знань!`);
     return true;
   }
 
@@ -243,7 +240,6 @@ class MarketplaceStore {
 
     if (this.forgePoints < item.costPoints) {
       sound.playClick();
-      arnoVoice.speak('Недостатньо Forge Points. Виконуйте більше тренувань та квестів!');
       return false;
     }
 
@@ -268,7 +264,6 @@ class MarketplaceStore {
 
     this.save();
     sound.playClick();
-    arnoVoice.speak(`Предмет «${target.name}» екіпіровано!`);
   }
 
   public publishProduct(data: {
@@ -303,7 +298,6 @@ class MarketplaceStore {
     this.myCreatorProfile.publishedItemsCount += 1;
     this.save();
     sound.playTrophy();
-    arnoVoice.speak(`Ваш авторський матеріал «${data.title}» опубліковано у Forge Marketplace!`);
     return newProd;
   }
 }

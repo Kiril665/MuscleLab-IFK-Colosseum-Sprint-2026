@@ -339,9 +339,9 @@ export const ProgressJournal: React.FC<ProgressJournalProps> = ({
 
         {sessions.length === 0 ? (
           <div className="text-center py-10 border border-dashed border-neutral-800 rounded-xl space-y-2">
-            <p className="text-neutral-400 text-sm">У журналі поки немає записів.</p>
+            <p className="text-neutral-300 font-bold text-sm">Поки немає тренувань</p>
             <p className="text-neutral-500 text-xs">
-              Виконай вправу в Камера-трекері або скористайся кнопкою «Записати тренування».
+              Виконайте вправу в Камера-трекері або скористайтеся кнопкою «Записати тренування».
             </p>
           </div>
         ) : (

@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Exercise } from '../types';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 import { 
   Play, 
   Pause, 
@@ -38,7 +37,6 @@ export const ExerciseVideoPlayer: React.FC<ExerciseVideoPlayerProps> = ({
   const [viewAngle, setViewAngle] = useState<'front' | 'side'>('side');
   const [showMusclesOverlay, setShowMusclesOverlay] = useState<boolean>(true);
   const [progress, setProgress] = useState<number>(0);
-  const [isSpeakingGuide, setIsSpeakingGuide] = useState<boolean>(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
@@ -52,22 +50,6 @@ export const ExerciseVideoPlayer: React.FC<ExerciseVideoPlayerProps> = ({
       setPlayerMode('biomechanics');
     }
   }, [exercise.id, exercise.youtubeId]);
-
-  // Subscribe to voice state
-  useEffect(() => {
-    const unsub = arnoVoice.subscribe((speaking) => {
-      setIsSpeakingGuide(speaking);
-    });
-    return () => unsub();
-  }, []);
-
-  // Voice explanation of technique by Arno
-  const handleExplainTechnique = () => {
-    sound.playClick();
-    const goodPoints = exercise.techniqueGood.slice(0, 2).join('. ');
-    const speechText = `Розбір техніки: ${exercise.name}. ${goodPoints}. Порада від Арно: ${exercise.tips}`;
-    arnoVoice.speak(speechText, { force: true });
-  };
 
   // High-precision Biomechanical Canvas Animation Engine (60 FPS)
   useEffect(() => {
@@ -311,20 +293,6 @@ export const ExerciseVideoPlayer: React.FC<ExerciseVideoPlayerProps> = ({
             <span>3D Біомеханіка (60 FPS)</span>
           </button>
         </div>
-
-        {/* Arno Voice Cue Button */}
-        <button
-          onClick={handleExplainTechnique}
-          className={`px-3.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-            isSpeakingGuide
-              ? 'bg-amber-500 text-neutral-950 border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.5)] animate-pulse'
-              : 'bg-neutral-950 hover:bg-neutral-800 border-neutral-800 text-amber-300'
-          }`}
-          title="Послухати голосовий розбір техніки від тренера Арно"
-        >
-          <Volume2 className="w-3.5 h-3.5" />
-          <span>{isSpeakingGuide ? 'Арно говорить...' : 'Арно: розбір техніки'}</span>
-        </button>
       </div>
 
       {/* PLAYER CONTAINER */}

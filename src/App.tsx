@@ -11,6 +11,8 @@ import { ProgramForge } from './components/ProgramForge';
 import { CameraTracker } from './components/CameraTracker';
 import { ProgressJournal } from './components/ProgressJournal';
 import { BattleMode } from './components/BattleMode';
+import { ForgeBattleArena } from './components/ForgeBattleArena';
+import { ForgePassportView } from './components/ForgePassportView';
 import { ProHub } from './components/ProHub';
 import { NutritionPlanner } from './components/NutritionPlanner';
 import { ForgeCommunity } from './components/ForgeCommunity';
@@ -19,41 +21,63 @@ import { ForgeProfileQuests } from './components/ForgeProfileQuests';
 import { ForgeJourneyEngine } from './components/ForgeJourneyEngine';
 import { ForgeMarketplaceStore } from './components/ForgeMarketplaceStore';
 import { SmartSearchModal } from './components/SmartSearchModal';
+import { HelpCenterView } from './components/HelpCenterView';
+import { Leaderboard } from './components/Leaderboard';
+import { ForgeWardrobe } from './components/ForgeWardrobe';
+import { ChallengeInviteLanding } from './components/ChallengeInviteLanding';
+import { HelpArticle } from './data/helpArticles';
 import { Discipline, AnvilStage, WorkoutSession, ForgedProgram, Exercise } from './types';
 import { EXERCISES } from './data/exercisesData';
 import { sound } from './services/soundEngine';
+import { authStore } from './services/authStore';
+import { AuthModal } from './components/AuthModal';
+import { OnboardingFlow } from './components/OnboardingFlow';
 import { Flame, Dumbbell, Shield } from 'lucide-react';
 
-const INITIAL_SESSIONS: WorkoutSession[] = [
-  {
-    id: 'ses_init_1',
-    date: new Date(Date.now() - 86400000 * 2).toISOString(),
-    exerciseName: 'Класичні віджимання від підлоги',
-    muscleGroup: 'chest',
-    discipline: 'calisthenics',
-    reps: 20,
-    totalXp: 200,
-    durationSeconds: 90
-  },
-  {
-    id: 'ses_init_2',
-    date: new Date(Date.now() - 86400000).toISOString(),
-    exerciseName: 'Підтягування широким прямим хватом',
-    muscleGroup: 'back',
-    discipline: 'calisthenics',
-    reps: 12,
-    totalXp: 216,
-    durationSeconds: 110
-  }
-];
-
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('home');
+  const [activeTab, setActiveTab] = useState<string>('battle');
   const [userDiscipline, setUserDiscipline] = useState<Discipline | null>(null);
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [forgedPrograms, setForgedPrograms] = useState<ForgedProgram[]>([]);
   const [currentExercise, setCurrentExercise] = useState<Exercise | null>(null);
+  const [selectedHelpArticle, setSelectedHelpArticle] = useState<HelpArticle | null>(null);
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
+  const [challengeInviteCode, setChallengeInviteCode] = useState<string | null>(null);
+  const [isWardrobeOpen, setIsWardrobeOpen] = useState<boolean>(false);
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState<boolean>(false);
+
+  // Authentication & Onboarding state
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(authStore.isAuthenticated());
+  const [currentUser, setCurrentUser] = useState(authStore.getCurrentUser());
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(!authStore.isAuthenticated());
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('register');
+  const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
+
+  useEffect(() => {
+    const unsubscribe = authStore.subscribe(() => {
+      const authed = authStore.isAuthenticated();
+      const user = authStore.getCurrentUser();
+      setIsAuthenticated(authed);
+      setCurrentUser(user);
+      if (!authed) {
+        setIsAuthModalOpen(true);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  // Detect invite link in URL
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const challengeParam = params.get('challenge');
+      if (challengeParam) {
+        setChallengeInviteCode(challengeParam);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Load persisted state from localStorage
   useEffect(() => {
@@ -67,7 +91,7 @@ export default function App() {
       if (savedSessions) {
         setSessions(JSON.parse(savedSessions));
       } else {
-        setSessions(INITIAL_SESSIONS);
+        setSessions([]);
       }
 
       const savedPrograms = localStorage.getItem('forgemuscle_programs');
@@ -214,6 +238,10 @@ export default function App() {
             onSelectExercise={setCurrentExercise}
             onWorkoutComplete={handleWorkoutComplete}
             userDiscipline={userDiscipline}
+            onBack={() => {
+              sound.playClick();
+              setActiveTab('exercises');
+            }}
           />
         )}
 
@@ -234,11 +262,24 @@ export default function App() {
           />
         )}
 
-        {(activeTab === 'battle' || activeTab === 'leaderboards') && (
-          <BattleMode
-            userDiscipline={userDiscipline}
-            sessions={sessions}
-            onContributeXp={handleContributeBattleXp}
+        {activeTab === 'battle' && (
+          <ForgeBattleArena
+            onBackToPassport={() => setActiveTab('passport')}
+            onNavigateToSoloVerifier={() => setActiveTab('camera')}
+          />
+        )}
+
+        {activeTab === 'passport' && (
+          <ForgePassportView
+            onStartBattle={() => setActiveTab('battle')}
+            onStartVerification={() => setActiveTab('camera')}
+          />
+        )}
+
+        {(activeTab === 'leaderboards' || activeTab === 'leaderboard') && (
+          <Leaderboard
+            onOpenInviteModal={() => setIsInviteModalOpen(true)}
+            onOpenWardrobeModal={() => setIsWardrobeOpen(true)}
           />
         )}
 
@@ -327,6 +368,16 @@ export default function App() {
         {activeTab === 'prohub' && (
           <ProHub />
         )}
+
+        {activeTab === 'help' && (
+          <HelpCenterView
+            initialArticle={selectedHelpArticle}
+            onNavigateToCamera={() => setActiveTab('camera')}
+            onNavigateToBattle={() => setActiveTab('battle')}
+            onNavigateToPassport={() => setActiveTab('passport')}
+            onBack={() => setActiveTab('battle')}
+          />
+        )}
       </main>
 
       {/* Global Smart Search Modal (Point 58) */}
@@ -340,10 +391,83 @@ export default function App() {
             if (found) {
               setCurrentExercise(found);
             }
+          } else if (tab === 'help' && itemData) {
+            setSelectedHelpArticle(itemData);
           }
           setActiveTab(tab);
         }}
       />
+
+      {/* Wardrobe Modal */}
+      {isWardrobeOpen && (
+        <ForgeWardrobe
+          onClose={() => setIsWardrobeOpen(false)}
+          userXp={totalXp}
+        />
+      )}
+
+      {/* Challenge Invite Modal */}
+      {(isInviteModalOpen || challengeInviteCode) && (
+        <ChallengeInviteLanding
+          inviteCode={challengeInviteCode}
+          onClose={() => {
+            setIsInviteModalOpen(false);
+            setChallengeInviteCode(null);
+          }}
+          onStartDuel={(exerciseName, targetReps, opponentName) => {
+            setIsInviteModalOpen(false);
+            setChallengeInviteCode(null);
+            setActiveTab('battle');
+          }}
+        />
+      )}
+
+      {/* Auth Modal */}
+      <AuthModal
+        isOpen={!isAuthenticated || isAuthModalOpen}
+        initialMode={authModalMode}
+        onClose={() => {
+          if (isAuthenticated) {
+            setIsAuthModalOpen(false);
+          }
+        }}
+        onSuccess={(isNew) => {
+          setIsAuthModalOpen(false);
+          setIsAuthenticated(true);
+          const user = authStore.getCurrentUser();
+          setCurrentUser(user);
+          if (isNew || (user && !user.hasCompletedOnboarding)) {
+            setShowOnboarding(true);
+          }
+        }}
+      />
+
+      {/* Onboarding Flow Modal for New Users */}
+      {showOnboarding && currentUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+          <div className="w-full max-w-xl bg-neutral-900 border border-neutral-800 rounded-3xl p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
+            <OnboardingFlow
+              initialUsername={currentUser.username}
+              initialDiscipline={userDiscipline}
+              onComplete={() => {
+                setShowOnboarding(false);
+                if (currentUser) {
+                  currentUser.hasCompletedOnboarding = true;
+                  authStore.updateProfile({ hasCompletedOnboarding: true }).catch(() => {});
+                }
+              }}
+              onStartPushupTest={() => {
+                setShowOnboarding(false);
+                if (currentUser) {
+                  currentUser.hasCompletedOnboarding = true;
+                  authStore.updateProfile({ hasCompletedOnboarding: true }).catch(() => {});
+                }
+                setActiveTab('camera');
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Atmospheric Footer */}
       <footer className="border-t border-neutral-800/80 bg-neutral-950/90 py-8 text-neutral-400 text-xs">

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Discipline, WorkoutSession } from '../types';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 import { BattleCameraDuel } from './BattleCameraDuel';
 import confetti from 'canvas-confetti';
 import { 
@@ -117,13 +116,6 @@ export const BattleMode: React.FC<BattleModeProps> = ({
       });
     } catch {
       // ignore
-    }
-
-    if (Math.random() > 0.5) {
-      const phrase = team === 'bodybuilding' 
-        ? 'Бодибілдинг тягне вперед! Відчуй пампінг!' 
-        : 'Калістеніка вириває перемогу! Гравітація підкорена!';
-      arnoVoice.speak(phrase);
     }
 
     setTimeout(() => {

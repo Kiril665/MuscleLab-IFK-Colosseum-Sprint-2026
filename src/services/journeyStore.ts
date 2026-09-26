@@ -1,7 +1,6 @@
 import { Discipline, GoalType, DifficultyLevel, MuscleGroup, ForgeEngineWorkout, ForgeEngineExercise, UserJourney } from '../types';
 import { EXERCISES } from '../data/exercisesData';
 import { sound } from './soundEngine';
-import { arnoVoice } from './arnoVoice';
 
 export interface ForgeEngineOptions {
   discipline: Discipline;
@@ -112,7 +111,6 @@ class JourneyStore {
     this.journey.xpToNextLevel = Math.max(0, this.journey.xpToNextLevel - gainedXp);
     this.save();
     sound.playLevelUp();
-    arnoVoice.speak(`Вітаю з завершенням сьогоднішнього тренування! Стрік збільшено до ${this.journey.streak} днів!`);
     return gainedXp;
   }
 
@@ -190,7 +188,6 @@ class JourneyStore {
 
     this.currentWorkout = newWorkout;
     this.notify();
-    arnoVoice.speak(`Нову програму викувано у Forge Engine! ${newWorkout.exercises.length} вправ готові до старту.`);
     return newWorkout;
   }
 

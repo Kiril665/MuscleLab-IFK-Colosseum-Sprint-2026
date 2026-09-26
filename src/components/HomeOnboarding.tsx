@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Flame, Dumbbell, Activity, ShieldAlert, ArrowRight, Zap, CheckCircle, Sparkles, Utensils, MessageSquare, Brain, Target, Dices, Award, Calendar, Compass, ShieldCheck, Check } from 'lucide-react';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 import { Discipline } from '../types';
 import { journeyStore } from '../services/journeyStore';
 
@@ -29,13 +28,6 @@ export const HomeOnboarding: React.FC<HomeOnboardingProps> = ({
   const handleDisciplineClick = (disc: Discipline) => {
     sound.playAnvilHit();
     onSelectDiscipline(disc);
-
-    const names = {
-      bodybuilding: 'Бодибілдинг. Залізна маса та гіпертрофія!',
-      calisthenics: 'Калістеніка. Повний контроль тіла та гравітації!',
-      hybrid: 'Гібридний атлетизм. Сила заліза та витривалість турніків!'
-    };
-    arnoVoice.speak(`Обрано напрямок: ${names[disc]} Програми та раціон оновлено!`, { force: true });
   };
 
   const disciplinesConfig = [
@@ -132,22 +124,10 @@ export const HomeOnboarding: React.FC<HomeOnboardingProps> = ({
                 sound.playClick();
                 onNavigate('camera');
               }}
-              className="px-5 py-3 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-neutral-950 font-black text-sm flex items-center gap-2 shadow-[0_0_20px_rgba(245,158,11,0.4)] hover:scale-105 active:scale-95 transition-all cursor-pointer font-heading tracking-wide"
+              className="px-6 py-3.5 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-neutral-950 font-black text-sm flex items-center gap-2 shadow-[0_0_25px_rgba(245,158,11,0.5)] hover:scale-105 active:scale-95 transition-all cursor-pointer font-heading tracking-wide"
             >
               <Flame className="w-4 h-4 fill-neutral-950" />
-              START TRAINING
-            </button>
-
-            <button
-              id="hero-forge-it-btn"
-              onClick={() => {
-                sound.playAnvilHit();
-                onNavigate('journey');
-              }}
-              className="px-5 py-3 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-amber-500/50 text-amber-300 hover:text-amber-200 font-bold text-sm transition-all cursor-pointer font-heading flex items-center gap-2 shadow-[0_0_15px_rgba(245,158,11,0.2)]"
-            >
-              <Zap className="w-4 h-4 text-amber-400" />
-              FORGE IT (План)
+              🔥 VERIFIED PUSH-UP ТЕСТ (&lt;60c)
             </button>
 
             <button
@@ -156,22 +136,22 @@ export const HomeOnboarding: React.FC<HomeOnboardingProps> = ({
                 sound.playClick();
                 onNavigate('battle');
               }}
-              className="px-5 py-3 rounded-xl bg-red-950/40 hover:bg-red-900/50 border border-red-500/40 text-red-300 font-bold text-sm transition-all cursor-pointer font-heading flex items-center gap-2"
+              className="px-5 py-3.5 rounded-xl bg-red-950/60 hover:bg-red-900/70 border border-red-500/50 text-red-200 font-bold text-sm transition-all cursor-pointer font-heading flex items-center gap-2 shadow-[0_0_15px_rgba(239,68,68,0.2)]"
             >
               <Target className="w-4 h-4 text-red-400" />
-              BATTLE
+              ⚔️ 60s BATTLE ARENA
             </button>
 
             <button
-              id="hero-community-btn"
+              id="hero-passport-btn"
               onClick={() => {
-                sound.playClick();
-                onNavigate('community');
+                sound.playAnvilHit();
+                onNavigate('passport');
               }}
-              className="px-5 py-3 rounded-xl bg-neutral-900/80 hover:bg-neutral-800 border border-neutral-700 text-neutral-300 hover:text-white font-bold text-sm transition-all cursor-pointer font-heading flex items-center gap-2"
+              className="px-5 py-3.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-amber-500/50 text-amber-300 hover:text-amber-200 font-bold text-sm transition-all cursor-pointer font-heading flex items-center gap-2 shadow-[0_0_15px_rgba(245,158,11,0.2)]"
             >
-              <MessageSquare className="w-4 h-4 text-cyan-400" />
-              COMMUNITY
+              <ShieldCheck className="w-4 h-4 text-amber-400" />
+              🛡️ FORGE PASSPORT
             </button>
           </div>
         </div>

@@ -4,30 +4,21 @@ import { sound } from './soundEngine';
 const SEED_NOTIFICATIONS: ForgeNotification[] = [
   {
     id: 'notif_1',
-    type: 'best_answer',
-    title: 'Кращу Відповідь обрано! 🏆',
-    message: 'Тарас «Залізо» позначив вашу пораду щодо положення кистей як найкращу. +50 Reputation XP!',
-    createdAt: new Date(Date.now() - 3600000 * 3).toISOString(),
+    type: 'achievement',
+    title: 'Ласкаво просимо до ForgeMuscle! 🛡️',
+    message: 'Ваша тренувальна система налаштована. Почніть тренування з AI-камерою або створіть власну програму.',
+    createdAt: new Date().toISOString(),
     isRead: false,
-    actionTab: 'community'
+    actionTab: 'camera'
   },
   {
     id: 'notif_2',
     type: 'level_up',
-    title: 'Ранг ковадла підвищено! ⚡',
-    message: 'Ви досягли стадії «Гартована Сталь». Розблоковано нові варіанти суперсетів.',
-    createdAt: new Date(Date.now() - 3600000 * 14).toISOString(),
+    title: 'Тренувальний профіль активний ⚡',
+    message: 'Усі валідні повторення, зафіксовані камерою, автоматично зараховуються до особистого прогресу.',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
     isRead: false,
     actionTab: 'profile_quests'
-  },
-  {
-    id: 'notif_3',
-    type: 'guild_invite',
-    title: 'Запрошення до Гільдії 🛡️',
-    message: 'Гільдія «Титани Турніків» запрошує вас приєднатися до щотижневого батлу за очки досвіду.',
-    createdAt: new Date(Date.now() - 3600000 * 22).toISOString(),
-    isRead: true,
-    actionTab: 'community'
   }
 ];
 

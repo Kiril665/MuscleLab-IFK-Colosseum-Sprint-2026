@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { X, Flame, Shield, ArrowRight, Lock, Mail, User, Sparkles, CheckCircle2, AlertCircle } from 'lucide-react';
 import { authStore } from '../services/authStore';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -17,24 +16,37 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onSuccess,
   initialMode = 'login'
 }) => {
-  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>(initialMode);
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot' | 'reset'>(initialMode);
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [resetToken, setResetToken] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [successInfo, setSuccessInfo] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [forgotSuccess, setForgotSuccess] = useState(false);
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
+
+  // Cooldown timer
+  React.useEffect(() => {
+    if (cooldownSeconds <= 0) return;
+    const timer = setInterval(() => {
+      setCooldownSeconds(prev => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldownSeconds]);
 
   if (!isOpen) return null;
 
   const handleGoogleAuth = async () => {
     setError(null);
+    setSuccessInfo(null);
     setIsSubmitting(true);
     sound.playClick();
 
     try {
-      // In this environment, we execute realistic Google OAuth flow
       const res = await authStore.signInWithGoogle({
         email: 'vrbkirill09@gmail.com',
         name: 'Kirill Vrb',
@@ -51,30 +63,66 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (cooldownSeconds > 0) return;
+
     setError(null);
+    setSuccessInfo(null);
     setIsSubmitting(true);
     sound.playClick();
 
     try {
       if (mode === 'login') {
         const res = await authStore.login(email, password);
+        setFailedAttempts(0);
         setIsSubmitting(false);
         onClose();
         onSuccess(res.isNewUser);
       } else if (mode === 'register') {
         const res = await authStore.register(email, username, password, displayName);
+        setFailedAttempts(0);
         setIsSubmitting(false);
         onClose();
         onSuccess(res.isNewUser);
       } else if (mode === 'forgot') {
-        setTimeout(() => {
-          setIsSubmitting(false);
-          setForgotSuccess(true);
-        }, 600);
+        const data = await authStore.forgotPassword(email);
+        setIsSubmitting(false);
+        if (data.resetToken) {
+          setResetToken(data.resetToken);
+          setMode('reset');
+          setSuccessInfo('Токен відновлення згенеровано. Введіть новий пароль.');
+        } else {
+          setSuccessInfo(data.message || 'Інструкції надіслано на вашу пошту.');
+        }
+      } else if (mode === 'reset') {
+        await authStore.resetPassword(resetToken, newPassword);
+        setFailedAttempts(0);
+        setIsSubmitting(false);
+        onClose();
+        onSuccess(false);
       }
     } catch (err: any) {
       setIsSubmitting(false);
-      setError(err.message || "Forge is temporarily unavailable. Your local settings are safe. Please try again later.");
+      const newAttempts = failedAttempts + 1;
+      setFailedAttempts(newAttempts);
+
+      if (err.requiresPasswordReset) {
+        setError(err.message || 'Ваш пароль потребує оновлення на криптографічний стандарт.');
+        if (err.resetToken) {
+          setResetToken(err.resetToken);
+          setMode('reset');
+        } else {
+          setMode('forgot');
+        }
+        return;
+      }
+
+      // Enforce client-side rate-limit debounce if repeated failures
+      if (newAttempts >= 5) {
+        setCooldownSeconds(60);
+        setError(`Забагато невдалих спроб (${newAttempts}). Будь ласка, зачекайте 60 секунд.`);
+      } else {
+        setError(err.message || "Forge is temporarily unavailable. Your local settings are safe. Please try again later.");
+      }
     }
   };
 
@@ -116,17 +164,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </div>
         )}
 
+        {/* Success Alert */}
+        {successInfo && (
+          <div className="mb-4 p-3.5 rounded-xl bg-emerald-950/50 border border-emerald-500/40 text-emerald-200 text-xs flex items-start gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            <p className="font-medium leading-relaxed">{successInfo}</p>
+          </div>
+        )}
+
         {/* Primary Action: Continue with Google (#62, #63) */}
-        {mode !== 'forgot' && (
+        {mode !== 'forgot' && mode !== 'reset' && (
           <div className="space-y-4 mb-6">
             <button
               type="button"
               id="auth-continue-google-btn"
               onClick={handleGoogleAuth}
-              disabled={isSubmitting}
+              disabled={isSubmitting || cooldownSeconds > 0}
               className="w-full py-3 px-4 rounded-xl bg-white hover:bg-neutral-100 text-neutral-900 font-bold text-sm flex items-center justify-center gap-3 transition-all shadow-md hover:shadow-lg active:scale-[0.98] cursor-pointer"
             >
-              {/* Official Google G SVG */}
               <svg className="w-5 h-5" viewBox="0 0 24 24">
                 <path
                   fill="#4285F4"
@@ -159,13 +214,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         )}
 
         {/* Tab switcher: Login / Register */}
-        {mode !== 'forgot' && (
+        {mode !== 'forgot' && mode !== 'reset' && (
           <div className="flex border-b border-neutral-800 mb-5">
             <button
               onClick={() => {
                 sound.playClick();
                 setMode('login');
                 setError(null);
+                setSuccessInfo(null);
               }}
               className={`flex-1 py-2 text-xs font-bold transition-all border-b-2 cursor-pointer ${
                 mode === 'login'
@@ -180,6 +236,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 sound.playClick();
                 setMode('register');
                 setError(null);
+                setSuccessInfo(null);
               }}
               className={`flex-1 py-2 text-xs font-bold transition-all border-b-2 cursor-pointer ${
                 mode === 'register'
@@ -196,63 +253,117 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         {mode === 'forgot' ? (
           <div className="space-y-4">
             <div className="text-center space-y-1">
-              <h3 className="text-base font-bold text-neutral-100">Відновлення доступу</h3>
-              <p className="text-xs text-neutral-400">Введіть email вашого акаунта для скидання пароля</p>
+              <h3 className="text-base font-bold text-neutral-100">Відновлення пароля</h3>
+              <p className="text-xs text-neutral-400">Введіть email вашого акаунта для отримання токена безпеки</p>
             </div>
 
-            {forgotSuccess ? (
-              <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-center space-y-2">
-                <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
-                <p className="text-xs text-emerald-200 font-medium">
-                  Інструкції для відновлення надіслано на <span className="font-bold text-white">{email}</span>. Перевірте поштову скриньку.
-                </p>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-neutral-300 mb-1">Email</label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-neutral-500 absolute left-3 top-3" />
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                    placeholder="athlete@example.com"
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-9 pr-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSubmitting || cooldownSeconds > 0}
+                className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs cursor-pointer transition-all disabled:opacity-50"
+              >
+                {cooldownSeconds > 0 ? `Зачекайте (${cooldownSeconds}с)` : isSubmitting ? 'Генерація...' : 'Отримати токен відновлення'}
+              </button>
+
+              <div className="flex items-center justify-between text-xs pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('reset');
+                    setError(null);
+                  }}
+                  className="text-amber-400 hover:underline"
+                >
+                  Вже маєте токен?
+                </button>
                 <button
                   type="button"
                   onClick={() => {
                     setMode('login');
-                    setForgotSuccess(false);
+                    setError(null);
+                    setSuccessInfo(null);
                   }}
-                  className="mt-2 text-xs text-amber-400 hover:underline font-bold"
+                  className="text-neutral-400 hover:text-neutral-200"
+                >
+                  Скасувати
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : mode === 'reset' ? (
+          <div className="space-y-4">
+            <div className="text-center space-y-1">
+              <h3 className="text-base font-bold text-neutral-100">Встановлення нового пароля</h3>
+              <p className="text-xs text-neutral-400">Введіть одноразовий токен та новий безпечний пароль (scrypt)</p>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-medium text-neutral-300 mb-1">Токен відновлення</label>
+                <input
+                  type="text"
+                  required
+                  value={resetToken}
+                  onChange={e => setResetToken(e.target.value)}
+                  placeholder="Вставте отриманий токен"
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-sm font-mono text-neutral-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-neutral-300 mb-1">Новий пароль (мін. 6 символів)</label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-neutral-500 absolute left-3 top-3" />
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-9 pr-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSubmitting || cooldownSeconds > 0}
+                className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs cursor-pointer transition-all disabled:opacity-50"
+              >
+                {cooldownSeconds > 0 ? `Зачекайте (${cooldownSeconds}с)` : isSubmitting ? 'Збереження...' : 'Зберегти новий пароль'}
+              </button>
+
+              <div className="text-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('login');
+                    setError(null);
+                    setSuccessInfo(null);
+                  }}
+                  className="text-xs text-neutral-400 hover:text-neutral-200"
                 >
                   Повернутися до входу
                 </button>
               </div>
-            ) : (
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-neutral-300 mb-1">Email</label>
-                  <div className="relative">
-                    <Mail className="w-4 h-4 text-neutral-500 absolute left-3 top-3" />
-                    <input
-                      type="email"
-                      required
-                      value={email}
-                      onChange={e => setEmail(e.target.value)}
-                      placeholder="athlete@example.com"
-                      className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-9 pr-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs cursor-pointer transition-all"
-                >
-                  Надіслати посилання
-                </button>
-
-                <div className="text-center">
-                  <button
-                    type="button"
-                    onClick={() => setMode('login')}
-                    className="text-xs text-neutral-400 hover:text-neutral-200"
-                  >
-                    Скасувати та повернутися
-                  </button>
-                </div>
-              </form>
-            )}
+            </form>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-3.5">
@@ -267,7 +378,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       required
                       value={username.replace('@', '')}
                       onChange={e => setUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
-                      placeholder="Kuznets"
+                      placeholder="alex_forge"
                       className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-8 pr-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
                     />
                   </div>
@@ -282,7 +393,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       type="text"
                       value={displayName}
                       onChange={e => setDisplayName(e.target.value)}
-                      placeholder="Іван Коваль"
+                      placeholder="Олексій"
                       className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-9 pr-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
                     />
                   </div>
@@ -301,7 +412,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   required
                   value={email}
                   onChange={e => setEmail(e.target.value)}
-                  placeholder={mode === 'login' ? 'athlete@example.com або @Kuznets' : 'athlete@example.com'}
+                  placeholder={mode === 'login' ? 'athlete@example.com або @username' : 'athlete@example.com'}
                   className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-9 pr-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
@@ -313,8 +424,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 {mode === 'login' && (
                   <button
                     type="button"
-                    onClick={() => setMode('forgot')}
-                    className="text-[11px] text-amber-400/90 hover:text-amber-300 hover:underline"
+                    onClick={() => {
+                      setMode('forgot');
+                      setError(null);
+                      setSuccessInfo(null);
+                    }}
+                    className="text-[11px] text-amber-400/90 hover:text-amber-300 hover:underline cursor-pointer"
                   >
                     Забули пароль?
                   </button>
@@ -335,10 +450,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
             <button
               type="submit"
-              disabled={isSubmitting}
-              className="w-full mt-2 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-neutral-950 font-black text-sm shadow-[0_0_20px_rgba(245,158,11,0.3)] transition-all flex items-center justify-center gap-2 cursor-pointer font-heading tracking-wide"
+              disabled={isSubmitting || cooldownSeconds > 0}
+              className="w-full mt-2 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-neutral-950 font-black text-sm shadow-[0_0_20px_rgba(245,158,11,0.3)] transition-all flex items-center justify-center gap-2 cursor-pointer font-heading tracking-wide disabled:opacity-50"
             >
-              <span>{mode === 'login' ? 'LOG IN' : 'CREATE ACCOUNT'}</span>
+              <span>{cooldownSeconds > 0 ? `ЗАЧЕКАЙТЕ (${cooldownSeconds}с)` : mode === 'login' ? 'LOG IN' : 'CREATE ACCOUNT'}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>

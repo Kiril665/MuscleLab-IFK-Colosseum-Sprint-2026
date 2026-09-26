@@ -1,6 +1,5 @@
 import { AcademyCourse, MythFactItem } from '../types';
 import { sound } from './soundEngine';
-import { arnoVoice } from './arnoVoice';
 
 export const ACADEMY_COURSES: AcademyCourse[] = [
   {
@@ -254,7 +253,6 @@ class AcademyStore {
     course.completedLessonsCount = course.lessons.filter((l) => l.isCompleted).length;
     this.save();
     sound.playLevelUp();
-    arnoVoice.speak(`Урок «${lesson.title}» пройдено! Твої знання загартовуються.`);
     return lesson.xpReward;
   }
 }

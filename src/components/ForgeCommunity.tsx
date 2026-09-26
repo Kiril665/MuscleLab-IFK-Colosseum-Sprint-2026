@@ -10,7 +10,6 @@ import {
 } from '../types';
 import { communityStore, REPUTATION_RANKS } from '../services/communityStore';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 import {
   MessageSquare,
   Sparkles,
@@ -180,6 +179,26 @@ export const ForgeCommunity: React.FC<ForgeCommunityProps> = ({ onEarnXp, initia
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      {/* Parked Module Banner */}
+      <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/40 flex items-center justify-between gap-4 text-amber-300">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-amber-500/20 border border-amber-500/30">
+            <Users className="w-5 h-5 text-amber-400" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold uppercase tracking-wider text-white">
+              Функція в розробці (Паркований модуль)
+            </h3>
+            <p className="text-xs text-neutral-300">
+              Модуль гільдій та публічної спільноти знаходиться на стадії внутрішнього тестування. Основний функціонал — AI Workout Verifier та Duels.
+            </p>
+          </div>
+        </div>
+        <span className="hidden sm:inline-block px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30 whitespace-nowrap">
+          Паркований модуль
+        </span>
+      </div>
+
       {/* Top Banner & Reputation Status */}
       <div className="relative rounded-3xl bg-gradient-to-r from-neutral-900 via-neutral-950 to-amber-950/40 border border-amber-500/30 p-6 sm:p-8 overflow-hidden shadow-2xl">
         <div className="absolute right-0 top-0 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -370,9 +389,9 @@ export const ForgeCommunity: React.FC<ForgeCommunityProps> = ({ onEarnXp, initia
             {filteredPosts.length === 0 ? (
               <div className="text-center py-16 bg-neutral-900/40 rounded-3xl border border-neutral-800">
                 <BookOpen className="w-12 h-12 text-neutral-600 mx-auto mb-3" />
-                <h3 className="text-lg font-bold text-white">Дописів не знайдено</h3>
+                <h3 className="text-lg font-bold text-white">Поки немає публікацій</h3>
                 <p className="text-xs text-neutral-400 mt-1">
-                  Будь першим, хто поділиться своїм досвідом у цій категорії!
+                  Будьте першим, хто поділиться своїм тренувальним досвідом!
                 </p>
               </div>
             ) : (
@@ -578,7 +597,16 @@ export const ForgeCommunity: React.FC<ForgeCommunityProps> = ({ onEarnXp, initia
 
           {/* Questions List */}
           <div className="space-y-4">
-            {filteredQuestions.map((q) => (
+            {filteredQuestions.length === 0 ? (
+              <div className="text-center py-16 bg-neutral-900/40 rounded-3xl border border-neutral-800">
+                <HelpCircle className="w-12 h-12 text-neutral-600 mx-auto mb-3" />
+                <h3 className="text-lg font-bold text-white">Поки немає запитань</h3>
+                <p className="text-xs text-neutral-400 mt-1">
+                  Поставте перше питання про техніку або раціон!
+                </p>
+              </div>
+            ) : (
+              filteredQuestions.map((q) => (
               <div
                 key={q.id}
                 className={`rounded-3xl border bg-neutral-900/80 p-5 sm:p-6 space-y-4 transition-all ${
@@ -737,7 +765,8 @@ export const ForgeCommunity: React.FC<ForgeCommunityProps> = ({ onEarnXp, initia
                   </div>
                 )}
               </div>
-            ))}
+            ))
+            )}
           </div>
         </div>
       )}

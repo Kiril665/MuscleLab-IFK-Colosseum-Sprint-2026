@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { ForgedProgram, Discipline, GoalType, ProgramExercise, Exercise } from '../types';
 import { EXERCISES } from '../data/exercisesData';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
+import { forgeGameStore } from '../services/forgeGameStore';
 import { 
   Hammer, 
   Flame, 
@@ -13,28 +13,41 @@ import {
   Save, 
   Check, 
   Play, 
-  RefreshCw 
+  RefreshCw,
+  ShieldCheck,
+  Camera,
+  Activity
 } from 'lucide-react';
 
 interface ProgramForgeProps {
   userDiscipline: Discipline | null;
   onSaveProgram: (program: ForgedProgram) => void;
   onStartExercise: (exercise: Exercise) => void;
+  onNavigateToVerifier?: () => void;
 }
 
 export const ProgramForge: React.FC<ProgramForgeProps> = ({
   userDiscipline,
   onSaveProgram,
-  onStartExercise
+  onStartExercise,
+  onNavigateToVerifier
 }) => {
   const [goal, setGoal] = useState<GoalType>('hypertrophy');
   const [inventory, setInventory] = useState<string>('gym');
   const [duration, setDuration] = useState<number>(40);
   const [discipline, setDiscipline] = useState<Discipline>(userDiscipline || 'bodybuilding');
+  const [passport, setPassport] = useState(forgeGameStore.getPassport());
   
   const [isForging, setIsForging] = useState<boolean>(false);
   const [forgedProgram, setForgedProgram] = useState<ForgedProgram | null>(null);
   const [isSaved, setIsSaved] = useState<boolean>(false);
+
+  useEffect(() => {
+    const unsub = forgeGameStore.subscribe(() => {
+      setPassport(forgeGameStore.getPassport());
+    });
+    return () => unsub();
+  }, []);
 
   // Canvas for sparks effect
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -142,12 +155,32 @@ export const ProgramForge: React.FC<ProgramForgeProps> = ({
       const shuffled = [...pool].sort(() => 0.5 - Math.random());
       const selected = shuffled.slice(0, duration === 20 ? 3 : duration === 40 ? 5 : 6);
 
-      const exercisesConfigured: ProgramExercise[] = selected.map((ex) => ({
-        exercise: ex,
-        sets: goal === 'strength' ? 4 : goal === 'endurance' ? 3 : 4,
-        reps: goal === 'strength' ? '4-6' : goal === 'endurance' ? '15-20' : '8-12',
-        restSeconds: goal === 'strength' ? 120 : goal === 'endurance' ? 45 : 75
-      }));
+      const prPushups = passport.personalRecords.pushups60s || 0;
+      const prSquats = passport.personalRecords.squats60s || 0;
+      const prPullups = passport.personalRecords.pullups60s || 0;
+
+      const exercisesConfigured: ProgramExercise[] = selected.map((ex) => {
+        let calculatedReps = goal === 'strength' ? '4-6' : goal === 'endurance' ? '15-20' : '8-12';
+
+        // Direct calibration from verified camera PRs if available
+        if (ex.id === 'pushups_classic' && prPushups > 0) {
+          const target = Math.max(5, Math.round(prPushups * (goal === 'strength' ? 0.75 : goal === 'endurance' ? 0.9 : 0.65)));
+          calculatedReps = `${target} (Калібровано під PR ${prPushups})`;
+        } else if (ex.id === 'squats_bodyweight' && prSquats > 0) {
+          const target = Math.max(10, Math.round(prSquats * (goal === 'strength' ? 0.8 : goal === 'endurance' ? 0.95 : 0.7)));
+          calculatedReps = `${target} (Калібровано під PR ${prSquats})`;
+        } else if (ex.id === 'pullups_classic' && prPullups > 0) {
+          const target = Math.max(3, Math.round(prPullups * (goal === 'strength' ? 0.8 : goal === 'endurance' ? 0.85 : 0.6)));
+          calculatedReps = `${target} (Калібровано під PR ${prPullups})`;
+        }
+
+        return {
+          exercise: ex,
+          sets: goal === 'strength' ? 4 : goal === 'endurance' ? 3 : 4,
+          reps: calculatedReps,
+          restSeconds: goal === 'strength' ? 120 : goal === 'endurance' ? 45 : 75
+        };
+      });
 
       const newProg: ForgedProgram = {
         id: `prog_${Date.now()}`,
@@ -163,7 +196,6 @@ export const ProgramForge: React.FC<ProgramForgeProps> = ({
       setForgedProgram(newProg);
       setIsForging(false);
       sound.playLevelUp();
-      arnoVoice.speak(`Програму викувано! На тебе чекає ${newProg.exercises.length} вправ на ${duration} хвилин. До бою!`, { force: true });
     }, 1000);
   };
 
@@ -244,6 +276,39 @@ export const ProgramForge: React.FC<ProgramForgeProps> = ({
             >
               <Hammer className="w-16 h-16 text-amber-400 drop-shadow-[0_0_15px_rgba(245,158,11,0.8)]" />
             </div>
+          </div>
+
+          {/* Verified Calibration Status from Passport */}
+          <div className="w-full max-w-4xl p-4 rounded-2xl bg-neutral-950/90 border border-amber-500/30 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
+            <div className="flex items-center gap-3 text-left">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 flex-shrink-0">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="font-bold text-white flex items-center gap-2">
+                  <span>Калібрування за даними Forge Passport</span>
+                  <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 font-mono text-[10px]">
+                    {passport.totalVerifiedReps > 0 ? `${passport.totalVerifiedReps} VERIFIED REPS` : '0 REPS'}
+                  </span>
+                </div>
+                <div className="text-neutral-400 text-[11px] mt-0.5 font-mono">
+                  Віджимання PR: <strong className="text-amber-300">{passport.personalRecords.pushups60s || 0}</strong> | 
+                  Присідання PR: <strong className="text-amber-300">{passport.personalRecords.squats60s || 0}</strong> | 
+                  Підтягування PR: <strong className="text-amber-300">{passport.personalRecords.pullups60s || 0}</strong>
+                </div>
+              </div>
+            </div>
+
+            {passport.totalVerifiedReps === 0 && onNavigateToVerifier && (
+              <button
+                type="button"
+                onClick={onNavigateToVerifier}
+                className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs flex items-center gap-1.5 flex-shrink-0 cursor-pointer shadow-md"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>Пройти 60с тест</span>
+              </button>
+            )}
           </div>
 
           {/* Form Parameters */}

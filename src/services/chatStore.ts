@@ -1,6 +1,5 @@
 import { ChatMessage, ChatRoom, FriendConnection } from '../types';
 import { sound } from './soundEngine';
-import { arnoVoice } from './arnoVoice';
 import { authStore } from './authStore';
 
 export const DEFAULT_CHAT_ROOMS: ChatRoom[] = [
@@ -15,44 +14,7 @@ export const DEFAULT_CHAT_ROOMS: ChatRoom[] = [
   { id: 'room_guild', name: 'Чат Моєї Гільдії', topic: 'Внутрішня координація учасників гільдії та спільний досвід', icon: '🛡️', membersOnline: 14, category: 'guild' }
 ];
 
-const SEED_FRIENDS: FriendConnection[] = [
-  {
-    id: 'fr_1',
-    userId: 'usr_forge_taras',
-    username: 'Тарас «Залізо»',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&h=120&fit=crop&crop=faces',
-    level: 28,
-    discipline: 'calisthenics',
-    reputationRank: 'Mentor',
-    status: 'online',
-    mutualGuild: 'Титани Турніків',
-    mutualBattle: 'Турнір Воркауту #12',
-    requestStatus: 'accepted'
-  },
-  {
-    id: 'fr_2',
-    userId: 'usr_forge_arnold',
-    username: 'Арнольд Сталевий',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop&crop=faces',
-    level: 19,
-    discipline: 'bodybuilding',
-    reputationRank: 'Master',
-    status: 'training',
-    mutualGuild: 'Братство Заліза',
-    requestStatus: 'accepted'
-  },
-  {
-    id: 'fr_3',
-    userId: 'usr_forge_artur',
-    username: 'Артур Новак',
-    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&h=120&fit=crop&crop=faces',
-    level: 11,
-    discipline: 'hybrid',
-    reputationRank: 'Helper',
-    status: 'offline',
-    requestStatus: 'accepted'
-  }
-];
+const SEED_FRIENDS: FriendConnection[] = [];
 
 class ChatStore {
   private rooms: ChatRoom[] = DEFAULT_CHAT_ROOMS;
@@ -408,7 +370,6 @@ class ChatStore {
     this.blockedUsers.add(userId);
     this.saveLocalSettings();
     sound.playClick();
-    arnoVoice.speak('Користувача заблоковано в чаті.');
   }
 
   public addFriend(username: string) {
@@ -426,7 +387,6 @@ class ChatStore {
     this.friends.unshift(newFr);
     this.saveLocalSettings();
     sound.playClick();
-    arnoVoice.speak(`Атлета ${username} додано до ваших тренувальних звʼязків!`);
   }
 }
 

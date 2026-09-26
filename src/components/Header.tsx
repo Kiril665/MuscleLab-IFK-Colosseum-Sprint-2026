@@ -27,9 +27,7 @@ import {
   LogOut
 } from 'lucide-react';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 import { authStore } from '../services/authStore';
-import { ArnoVoiceSettingsModal } from './ArnoVoiceSettingsModal';
 import { Discipline, AnvilStage, ForgeUser } from '../types';
 
 interface HeaderProps {
@@ -60,11 +58,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [volume, setVolume] = useState(sound.getVolume());
   const [showVolumePopup, setShowVolumePopup] = useState(false);
   const [isAmbientOn, setIsAmbientOn] = useState(sound.getIsAmbientPlaying());
-  const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [showBranchModal, setShowBranchModal] = useState(false);
-  const [isArnoSpeaking, setIsArnoSpeaking] = useState(false);
-  const [isVoiceEnabled, setIsVoiceEnabled] = useState(arnoVoice.getIsEnabled());
-  const [coachName, setCoachName] = useState(arnoVoice.getCoachDisplayName());
   const [showAllModulesMenu, setShowAllModulesMenu] = useState(false);
 
   useEffect(() => {
@@ -73,15 +67,6 @@ export const Header: React.FC<HeaderProps> = ({
       setSyncStatus(authStore.getSyncStatus());
     });
     return () => unsubAuth();
-  }, []);
-
-  useEffect(() => {
-    const unsub = arnoVoice.subscribe((speaking) => {
-      setIsArnoSpeaking(speaking);
-      setIsVoiceEnabled(arnoVoice.getIsEnabled());
-      setCoachName(arnoVoice.getCoachDisplayName());
-    });
-    return () => unsub();
   }, []);
 
   // Global Ctrl+K / Cmd+K search hotkey
@@ -97,20 +82,11 @@ export const Header: React.FC<HeaderProps> = ({
   }, [onOpenSearch]);
 
   const navItems = [
-    { id: 'home', label: 'Головна' },
-    { id: 'journey', label: 'Journey', badge: '🔥' },
-    { id: 'exercises', label: 'Вправи' },
-    { id: 'forge', label: 'Кузня' },
-    { id: 'camera', label: 'Камера AI', badge: 'AI' },
-    { id: 'nutrition', label: 'Раціон' },
-    { id: 'journal', label: 'Журнал' },
-    { id: 'battle', label: 'Battle Mode', badge: 'VS' },
-    { id: 'community', label: 'Спільнота', badge: '🧠' },
-    { id: 'chat', label: 'Чат', badge: '💬' },
-    { id: 'education', label: 'Знання & Wiki', badge: '📚' },
-    { id: 'profile_quests', label: 'Квести & Профіль', badge: '🎯' },
-    { id: 'market', label: 'Маркет', badge: '🛒' },
-    { id: 'prohub', label: 'Pro-Hub' }
+    { id: 'battle', label: 'Forge Battle', badge: '60s' },
+    { id: 'camera', label: 'Camera Verifier', badge: 'AI' },
+    { id: 'passport', label: 'Forge Passport', badge: 'SOL' },
+    { id: 'leaderboards', label: 'Leaderboard', badge: '🏆' },
+    { id: 'chat', label: 'Forge Chat', badge: 'Live' }
   ];
 
   // Point 57: Complete Catalog of all 16 systems
@@ -208,7 +184,7 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Logo Brand */}
           <button
             id="header-logo-btn"
-            onClick={() => handleTabClick('home')}
+            onClick={() => handleTabClick('battle')}
             className="flex items-center gap-3.5 group text-left cursor-pointer focus:outline-none"
           >
             <div className="relative w-12 h-12 rounded-xl overflow-hidden border border-amber-500/40 shadow-[0_0_15px_rgba(245,158,11,0.3)] group-hover:shadow-[0_0_25px_rgba(234,88,12,0.6)] transition-all">
@@ -227,8 +203,8 @@ export const Header: React.FC<HeaderProps> = ({
                 </span>
                 <Flame className="w-4 h-4 text-orange-500 animate-pulse" />
               </div>
-              <p className="text-[11px] tracking-wider uppercase text-neutral-400 font-medium">
-                Кузня Тіла та Духу
+              <p className="text-[10px] tracking-wider uppercase text-amber-400/90 font-mono font-medium">
+                Verifiable Competitions
               </p>
             </div>
           </button>
@@ -366,26 +342,6 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
               )}
             </div>
-
-            {/* Coach Arno Voice Settings Button */}
-            <button
-              id="arno-voice-settings-btn"
-              onClick={() => {
-                sound.playClick();
-                setShowVoiceModal(true);
-              }}
-              title={isVoiceEnabled ? "Налаштування голосу тренера Арно" : "Голос Арно вимкнено (клікніть щоб увімкнути)"}
-              className={`px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer flex items-center gap-1.5 text-xs font-bold ${
-                isArnoSpeaking
-                  ? 'border-amber-400 bg-amber-500 text-neutral-950 shadow-[0_0_15px_rgba(245,158,11,0.6)] animate-pulse'
-                  : isVoiceEnabled
-                  ? 'border-amber-500/40 bg-amber-950/30 text-amber-300 hover:bg-amber-900/40'
-                  : 'border-neutral-800 bg-neutral-900/60 text-neutral-500 hover:text-neutral-300'
-              }`}
-            >
-              <Mic className={`w-3.5 h-3.5 ${isArnoSpeaking ? 'animate-bounce' : ''}`} />
-              <span className="hidden sm:inline">Арно</span>
-            </button>
 
             {/* Current Discipline Badge / Quick Switcher Modal Trigger */}
             <button
@@ -640,7 +596,6 @@ export const Header: React.FC<HeaderProps> = ({
                       onClick={() => {
                         sound.playAnvilHit();
                         if (onSelectDiscipline) onSelectDiscipline('bodybuilding');
-                        arnoVoice.speak('Обрано бойову гілку Бодибілдингу! Залізна маса та прогресивне перевантаження!', { force: true });
                         setShowBranchModal(false);
                       }}
                       className="w-full py-2 px-3 rounded-xl bg-neutral-800 hover:bg-amber-500 hover:text-neutral-950 border border-neutral-700 text-white font-bold text-xs transition-all cursor-pointer"
@@ -698,7 +653,6 @@ export const Header: React.FC<HeaderProps> = ({
                       onClick={() => {
                         sound.playAnvilHit();
                         if (onSelectDiscipline) onSelectDiscipline('calisthenics');
-                        arnoVoice.speak('Обрано бойову гілку Калістеніки! Повний контроль гравітації та турніків!', { force: true });
                         setShowBranchModal(false);
                       }}
                       className="w-full py-2 px-3 rounded-xl bg-neutral-800 hover:bg-cyan-500 hover:text-neutral-950 border border-neutral-700 text-white font-bold text-xs transition-all cursor-pointer"
@@ -756,7 +710,6 @@ export const Header: React.FC<HeaderProps> = ({
                       onClick={() => {
                         sound.playAnvilHit();
                         if (onSelectDiscipline) onSelectDiscipline('hybrid');
-                        arnoVoice.speak('Обрано бойову гілку Гібридного Атлетизму! Сила заліза та турніків!', { force: true });
                         setShowBranchModal(false);
                       }}
                       className="w-full py-2 px-3 rounded-xl bg-neutral-800 hover:bg-orange-500 hover:text-neutral-950 border border-neutral-700 text-white font-bold text-xs transition-all cursor-pointer"
@@ -813,12 +766,6 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
       )}
-
-      {/* Coach Arno Voice Settings Modal */}
-      <ArnoVoiceSettingsModal
-        isOpen={showVoiceModal}
-        onClose={() => setShowVoiceModal(false)}
-      />
     </header>
   );
 };

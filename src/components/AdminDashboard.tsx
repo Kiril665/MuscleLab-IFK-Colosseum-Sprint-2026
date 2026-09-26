@@ -42,9 +42,15 @@ export const AdminDashboard: React.FC = () => {
   const loadAdminData = async () => {
     setIsLoading(true);
     try {
+      const token = localStorage.getItem('forgemuscle_auth_token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      };
+
       const [mRes, uRes] = await Promise.all([
-        fetch('/api/admin/metrics'),
-        fetch('/api/admin/users')
+        fetch('/api/admin/metrics', { headers }),
+        fetch('/api/admin/users', { headers })
       ]);
 
       if (mRes.ok) {
@@ -59,6 +65,16 @@ export const AdminDashboard: React.FC = () => {
       console.error('Failed to load admin data:', err);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleLoginAsAdmin = async () => {
+    sound.playClick();
+    try {
+      await authStore.signInWithGoogle({ email: 'vrbkirill09@gmail.com', name: 'Kirill (Admin)' });
+      await loadAdminData();
+    } catch {
+      // ignore
     }
   };
 

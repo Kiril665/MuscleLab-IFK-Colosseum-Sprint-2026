@@ -15,6 +15,23 @@ export type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced';
 
 export type GoalType = 'hypertrophy' | 'strength' | 'endurance' | 'recomp';
 
+export type CameraViewMode = 'front' | 'side' | 'back';
+
+export type ExerciseCategory = 
+  | 'upper_body' 
+  | 'lower_body' 
+  | 'core' 
+  | 'general_conditioning'
+  | 'chest'
+  | 'back'
+  | 'shoulders'
+  | 'biceps'
+  | 'triceps'
+  | 'abs'
+  | 'legs';
+
+export type UnifiedDifficulty = 'easy' | 'medium' | 'hard' | 'beginner' | 'intermediate' | 'advanced';
+
 export interface Exercise {
   id: string;
   name: string;
@@ -35,6 +52,13 @@ export interface Exercise {
   youtubeTitle?: string;
   tempo?: string;
   tips: string;
+  cameraVerifierId?: string;
+  cameraTrackingSupported?: boolean;
+  // Extended exercise properties
+  category?: ExerciseCategory | string;
+  cameraView?: CameraViewMode;
+  instructions?: string[];
+  duration?: string;
 }
 
 export interface ProgramExercise {
@@ -64,6 +88,9 @@ export interface WorkoutSession {
   reps: number;
   totalXp: number;
   durationSeconds: number;
+  proofHash?: string;
+  serverStatus?: string;
+  solanaTxSignature?: string | null;
 }
 
 export type AnvilStage =
@@ -681,7 +708,7 @@ export interface UserSessionInfo {
 
 export interface ForgeUser {
   id: string;               // Unique internal account ID (e.g. usr_xxxx)
-  username: string;         // Unique e.g. @Kuznets
+  username: string;         // Unique e.g. @alex_forge
   displayName: string;      // User visible display name
   email: string;
   avatar: string;
@@ -752,6 +779,129 @@ export interface BusinessMetrics {
   totalMarketplacePurchases: number;
   premiumSubscribersCount: number;
   monthlyGrossRevenueUah: number;
+}
+
+// ==================== FORGE COMPETITIVE GAME & VERIFIER ====================
+
+export type ForgeProgressionTier =
+  | 'raw_metal'
+  | 'forged'
+  | 'muscles'
+  | 'armor'
+  | 'fire_aura'
+  | 'tempered_steel'
+  | 'legendary_forge';
+
+export interface ForgeProgressionInfo {
+  tier: ForgeProgressionTier;
+  title: string;
+  subtitle: string;
+  badge: string;
+  minRepsRequired: number;
+  minWinsRequired: number;
+  unlockCondition: string;
+  color: string;
+  auraGradient: string;
+  soundEffect?: string;
+}
+
+export type VerifiedExerciseKind = 'pushups' | 'squats' | 'pullups';
+
+export interface VerifiedRepDetail {
+  repNumber: number;
+  timestamp: number;
+  romPercent: number;
+  tempoSeconds: number;
+  valid: boolean;
+  rejectReason?: string;
+}
+
+export interface VerificationProofEnvelope {
+  sessionId: string;
+  sessionNonce: string;
+  athleteWallet: string;
+  athleteName: string;
+  exercise: VerifiedExerciseKind;
+  durationSeconds: number;
+  validReps: number;
+  rejectedReps: number;
+  rejectionReasons: string[];
+  repDetails: VerifiedRepDetail[];
+  livenessPassed: boolean;
+  antiReplayNonceValid: boolean;
+  anomalyScore: number; // 0 (clean) to 100 (suspicious)
+  proofHash: string; // SHA-256 digest of session metrics
+  serverSignature: string; // Verifier Ed25519 signature
+  verifierPublicKey: string;
+  timestamp: string;
+  solanaTxSignature: string | null;
+  solanaExplorerUrl: string | null;
+  status: 'VERIFIED_ON_CHAIN' | 'VERIFIED_FORGE' | 'VERIFIED_LOCAL' | 'REJECTED_CHEAT_DETECTED' | 'PENDING';
+}
+
+export interface VerifiedAchievement {
+  id: string;
+  title: string;
+  description: string;
+  earnedAt: string;
+  badgeIcon: string;
+  category: 'pushup' | 'squat' | 'pullup' | 'battle' | 'forge_tier';
+  repsRequirement?: number;
+  solanaTxSignature: string | null;
+  solanaExplorerUrl: string | null;
+  proofHash: string;
+}
+
+export interface ForgePassportData {
+  walletAddress: string | null;
+  battlesCount: number;
+  winsCount: number;
+  lossesCount: number;
+  totalVerifiedReps: number;
+  personalRecords: {
+    pushups60s: number;
+    squats60s: number;
+    pullups60s: number;
+  };
+  forgeTier: ForgeProgressionTier;
+  achievements: VerifiedAchievement[];
+  lastActiveNonce: string | null;
+  reputationBadge: string;
+}
+
+export interface DuelParticipant {
+  id: string;
+  name: string;
+  wallet: string;
+  avatar: string;
+  isMe: boolean;
+  validReps: number;
+  rejectedReps: number;
+  currentRom: number;
+  lastRepStatus: 'valid' | 'rejected' | 'idle';
+  lastRejectReason?: string;
+  repLogs: { rep: number; valid: boolean; time: number; note: string }[];
+}
+
+export interface BattleSessionData {
+  id: string;
+  code: string;
+  exercise: VerifiedExerciseKind;
+  timeLimit: number; // usually 60s
+  status: 'lobby' | 'active' | 'finished';
+  player1: DuelParticipant;
+  player2: DuelParticipant;
+  winnerId: string | 'draw' | null;
+  winnerReps: number;
+  nonce: string;
+  solanaTx?: {
+    signature: string | null;
+    blockHeight?: number;
+    timestamp: string;
+    proofHash: string;
+    explorerUrl: string | null;
+    status?: string;
+  };
 }
 
 

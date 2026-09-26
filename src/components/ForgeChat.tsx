@@ -25,7 +25,6 @@ import { chatStore } from '../services/chatStore';
 import { authStore } from '../services/authStore';
 import { ChatMessage, ChatRoom, FriendConnection, ForgeUser } from '../types';
 import { sound } from '../services/soundEngine';
-import { arnoVoice } from '../services/arnoVoice';
 
 export const ForgeChat: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<ForgeUser | null>(authStore.getCurrentUser());
@@ -149,18 +148,6 @@ export const ForgeChat: React.FC = () => {
     }
   };
 
-  const handleQuickSwitch = async (username: string) => {
-    try {
-      setIsSwitchingUser(true);
-      await authStore.loginAsDemo(username);
-      setChatError(null);
-    } catch (err: any) {
-      setChatError(err.message || 'Не вдалося змінити акаунт');
-    } finally {
-      setIsSwitchingUser(false);
-    }
-  };
-
   const activeRoom = rooms.find((r) => r.id === activeChannelId);
   const activeFriend = friends.find((f) => f.id === activeChannelId);
 
@@ -177,12 +164,31 @@ export const ForgeChat: React.FC = () => {
   const handleReport = () => {
     if (!reportingMessage) return;
     sound.playClick();
-    arnoVoice.speak('Повідомлення надіслано модераторам для перевірки.');
     setReportingMessage(null);
   };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      {/* Parked Module Banner */}
+      <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/40 flex items-center justify-between gap-4 text-amber-300">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-amber-500/20 border border-amber-500/30">
+            <Radio className="w-5 h-5 text-amber-400 animate-pulse" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold uppercase tracking-wider text-white">
+              Функція в розробці (Паркований модуль)
+            </h3>
+            <p className="text-xs text-neutral-300">
+              Глобальний P2P-чат тимчасово працює в демонстраційному режимі. Основний фокус платформи — Camera Verifier та 60s Battle.
+            </p>
+          </div>
+        </div>
+        <span className="hidden sm:inline-block px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30 whitespace-nowrap">
+          Roadmap Q4
+        </span>
+      </div>
+
       {/* Mobile Top Toggle */}
       <div className="flex md:hidden items-center justify-between bg-neutral-900/90 p-2 rounded-2xl border border-neutral-800 text-xs">
         <button
@@ -278,32 +284,36 @@ export const ForgeChat: React.FC = () => {
                 Звʼязки та Атлети ({friends.length})
               </span>
               <div className="space-y-1">
-                {friends.map((friend) => {
-                  const isActive = activeChannelId === friend.id;
-                  return (
-                    <button
-                      key={friend.id}
-                      onClick={() => {
-                        sound.playClick();
-                        setActiveChannelId(friend.id);
-                        setMobileTab('messages');
-                      }}
-                      className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
-                        isActive
-                          ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
-                          : 'text-neutral-300 hover:bg-neutral-800/60 hover:text-neutral-100'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 truncate">
-                        <div className="relative w-6 h-6 rounded-full overflow-hidden shrink-0 border border-neutral-700">
-                          <img src={friend.avatar} alt={friend.username} className="w-full h-full object-cover" />
+                {friends.length === 0 ? (
+                  <p className="px-2 py-1 text-[11px] text-neutral-500 italic">Поки немає друзів</p>
+                ) : (
+                  friends.map((friend) => {
+                    const isActive = activeChannelId === friend.id;
+                    return (
+                      <button
+                        key={friend.id}
+                        onClick={() => {
+                          sound.playClick();
+                          setActiveChannelId(friend.id);
+                          setMobileTab('messages');
+                        }}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
+                          isActive
+                            ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
+                            : 'text-neutral-300 hover:bg-neutral-800/60 hover:text-neutral-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <div className="relative w-6 h-6 rounded-full overflow-hidden shrink-0 border border-neutral-700">
+                            <img src={friend.avatar} alt={friend.username} className="w-full h-full object-cover" />
+                          </div>
+                          <span className="truncate font-medium">{friend.username}</span>
                         </div>
-                        <span className="truncate font-medium">{friend.username}</span>
-                      </div>
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" title="Онлайн" />
-                    </button>
-                  );
-                })}
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" title="Онлайн" />
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </div>
           </div>
@@ -346,7 +356,7 @@ export const ForgeChat: React.FC = () => {
               </p>
             </div>
 
-            {/* Current user switch bar for multi-user testing */}
+            {/* Current user badge */}
             <div className="flex items-center gap-2">
               {currentUser ? (
                 <div className="flex items-center gap-1.5 bg-neutral-900/80 border border-neutral-800 px-2.5 py-1 rounded-xl text-xs">
@@ -357,32 +367,10 @@ export const ForgeChat: React.FC = () => {
                   />
                   <span className="text-neutral-300 font-medium text-[11px] hidden sm:inline">Ви:</span>
                   <span className="text-amber-400 font-bold font-mono text-[11px]">{currentUser.username}</span>
-                  <button
-                    onClick={() => handleQuickSwitch(currentUser.username === '@Kuznets' ? '@IronArnie' : '@Kuznets')}
-                    disabled={isSwitchingUser}
-                    className="ml-1 text-[10px] px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-200 transition-colors cursor-pointer"
-                    title="Швидке перемикання акаунта для тестування спільного діалогу"
-                  >
-                    {isSwitchingUser ? '...' : currentUser.username === '@Kuznets' ? '⇄ як @IronArnie' : '⇄ як @Kuznets'}
-                  </button>
                 </div>
               ) : (
                 <div className="flex items-center gap-1.5 bg-neutral-900/80 border border-neutral-800 px-2.5 py-1 rounded-xl text-xs">
-                  <span className="text-neutral-400 text-[11px]">Гість:</span>
-                  <button
-                    onClick={() => handleQuickSwitch('@Kuznets')}
-                    disabled={isSwitchingUser}
-                    className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 cursor-pointer"
-                  >
-                    Вхід @Kuznets
-                  </button>
-                  <button
-                    onClick={() => handleQuickSwitch('@IronArnie')}
-                    disabled={isSwitchingUser}
-                    className="text-[10px] px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30 cursor-pointer"
-                  >
-                    @IronArnie
-                  </button>
+                  <span className="text-neutral-400 text-[11px]">Режим гостя</span>
                 </div>
               )}
             </div>
@@ -409,8 +397,8 @@ export const ForgeChat: React.FC = () => {
             {messages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-neutral-500 text-xs text-center p-6">
                 <MessageSquare className="w-8 h-8 mb-2 opacity-40 text-amber-400" />
-                <p>У цій кімнаті ще немає повідомлень.</p>
-                <p className="text-[11px] mt-1 text-neutral-600">Будьте першим, хто поділиться технічною порадою або досвідом!</p>
+                <p className="text-neutral-300 font-bold">Поки немає повідомлень</p>
+                <p className="text-[11px] mt-1 text-neutral-500">Будьте першим, хто напише в цей чат!</p>
               </div>
             ) : (
               messages.map((msg) => {
@@ -608,20 +596,6 @@ export const ForgeChat: React.FC = () => {
           {!currentUser && (
             <div className="px-4 py-2 bg-amber-950/30 border-t border-amber-500/20 text-[11px] text-amber-300 flex items-center justify-between">
               <span>Увійдіть в акаунт, щоб писати повідомлення в реальному часі.</span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => handleQuickSwitch('@Kuznets')}
-                  className="px-2 py-0.5 bg-amber-500 text-neutral-950 rounded font-semibold text-[10px] cursor-pointer"
-                >
-                  Швидкий вхід (@Kuznets)
-                </button>
-                <button
-                  onClick={() => handleQuickSwitch('@IronArnie')}
-                  className="px-2 py-0.5 bg-neutral-800 text-neutral-200 rounded text-[10px] cursor-pointer"
-                >
-                  як @IronArnie
-                </button>
-              </div>
             </div>
           )}
 
