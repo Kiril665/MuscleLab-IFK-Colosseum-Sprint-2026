@@ -41,7 +41,7 @@ export const ChallengeInviteLanding: React.FC<ChallengeInviteLandingProps> = ({
   inviteCode,
   onClose,
   onStartDuel,
-  currentUserWallet = '',
+  currentUserWallet = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
   currentUserName = 'Кузнець Forge'
 }) => {
   const [exercise, setExercise] = useState<string>('pushups');

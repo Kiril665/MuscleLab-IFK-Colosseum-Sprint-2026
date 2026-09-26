@@ -1289,6 +1289,9 @@ export class UniversalBurpeesDetector implements IUniversalDetector {
 // ============================================================================
 
 export const SUPPORTED_EXERCISE_IDS = new Set<string>([
+  'push_up',
+  'pull_up',
+  'squat',
   'pushups_classic',
   'pushups_wide_grip',
   'diamond_pushups',
@@ -1305,6 +1308,7 @@ export const SUPPORTED_EXERCISE_IDS = new Set<string>([
   'lunges_bodyweight',
   'calf_raises',
   'pistol_squats',
+  'bulgarian_split_squats',
   'floor_crunches',
   'hanging_leg_raises',
   'plank_classic',
@@ -1327,11 +1331,13 @@ export class UniversalExerciseRegistry {
 
     // Check keyword patterns strictly matching supported exercises
     if (
+      lower.includes('push_up') ||
       lower.includes('pushup') ||
       lower.includes('віджиман') ||
       lower.includes('diamond') ||
       lower.includes('dips') ||
       lower.includes('брус') ||
+      lower.includes('pull_up') ||
       lower.includes('pullup') ||
       lower.includes('підтяг') ||
       lower.includes('chin_up') ||
@@ -1392,7 +1398,7 @@ export class UniversalExerciseRegistry {
 
     // Push-up variants
     if (
-      lower.includes('pushup') ||
+      lower.includes('push') ||
       lower.includes('віджиман') ||
       lower.includes('diamond') ||
       lower.includes('dip') ||

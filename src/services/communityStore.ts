@@ -23,6 +23,7 @@ import {
   Discipline
 } from '../types';
 import { sound } from './soundEngine';
+import { authStore } from './authStore';
 
 export const REPUTATION_RANKS: ReputationRankInfo[] = [
   { rank: 'Newcomer', minPoints: 0, title: 'Новачок Кузні', color: 'text-neutral-400', badge: '🌱', description: 'Перші кроки в спортивній спільноті' },
@@ -391,6 +392,9 @@ class CommunityStore {
   constructor() {
     this.userProfile = this.loadUserProfile();
     this.loadData();
+    authStore.subscribe(() => {
+      this.notify();
+    });
   }
 
   private loadUserProfile(): UserProfile {
@@ -484,6 +488,23 @@ class CommunityStore {
   // ==================== GETTERS ====================
 
   public getUserProfile(): UserProfile {
+    const authUser = authStore.getCurrentUser();
+    if (authUser) {
+      return {
+        ...this.userProfile,
+        id: authUser.id,
+        username: authUser.username,
+        avatar: authUser.avatar,
+        level: authUser.level,
+        streakDays: authUser.streak,
+        discipline: authUser.discipline,
+        bio: authUser.bio || this.userProfile.bio,
+        isPremium: authUser.isPremium,
+        isCreator: authUser.role === 'CREATOR' || authUser.role === 'VERIFIED_CREATOR',
+        guildId: authUser.guildId || this.userProfile.guildId,
+        guildName: authUser.guildName || this.userProfile.guildName
+      };
+    }
     return { ...this.userProfile };
   }
 

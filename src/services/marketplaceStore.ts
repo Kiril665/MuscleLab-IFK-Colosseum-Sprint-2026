@@ -5,6 +5,7 @@ import {
   PartnerSponsorship
 } from '../types';
 import { sound } from './soundEngine';
+import { authStore } from './authStore';
 
 export const SEED_MARKETPLACE_PRODUCTS: MarketplaceProduct[] = [
   {
@@ -212,13 +213,16 @@ class MarketplaceStore {
   }
 
   public getIsPremium(): boolean {
+    const user = authStore.getCurrentUser();
+    if (user) {
+      return Boolean(user.isPremium);
+    }
     return this.isPremiumUser;
   }
 
-  public togglePremium() {
-    this.isPremiumUser = !this.isPremiumUser;
+  public setLocalPremiumVerified(status: boolean) {
+    this.isPremiumUser = status;
     this.save();
-    sound.playLevelUp();
   }
 
   public purchaseProduct(productId: string): boolean {

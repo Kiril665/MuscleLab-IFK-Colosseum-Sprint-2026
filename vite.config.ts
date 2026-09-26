@@ -12,7 +12,6 @@ export default defineConfig(() => {
                               },
                             },
                             server: {
-                              // Allow the current ngrok host.
                               allowedHosts: [
                                 'carina-ridgy-disorganizedly.ngrok-free.dev',
                               ],

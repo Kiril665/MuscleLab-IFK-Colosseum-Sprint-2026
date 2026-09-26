@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { VerifiedExerciseKind, BattleSessionData, DuelParticipant } from '../types';
-import { forgeGameStore, ACTIVE_SPONSOR_CHALLENGE } from '../services/forgeGameStore';
+import { VerifiedExerciseKind, VerificationProofEnvelope, Exercise } from '../types';
+import { forgeGameStore } from '../services/forgeGameStore';
 import { sound } from '../services/soundEngine';
 import confetti from 'canvas-confetti';
 import { poseService } from '../services/pose/PoseDetectorService';
 import { drawBiomechanicalSkeleton } from '../services/pose/skeletonDrawer';
+import { BattleExerciseSelection } from './BattleExerciseSelection';
 import { 
   Swords, 
   Flame, 
@@ -22,37 +23,68 @@ import {
   CheckCircle2, 
   Zap, 
   Activity, 
-  Volume2, 
-  VolumeX,
-  Sparkles,
-  ArrowRight,
-  Search,
-  Users
+  Sparkles, 
+  ArrowRight, 
+  Search, 
+  Users,
+  Lock,
+  RefreshCw,
+  XCircle
 } from 'lucide-react';
 
 interface ForgeBattleArenaProps {
   onBackToPassport: () => void;
   onNavigateToSoloVerifier: () => void;
+  onNavigateToBilling?: () => void;
 }
 
 export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
   onBackToPassport,
-  onNavigateToSoloVerifier
+  onNavigateToSoloVerifier,
+  onNavigateToBilling
 }) => {
-  // Exercise Selection
-  const [selectedExercise, setSelectedExercise] = useState<VerifiedExerciseKind>('pushups');
-  const [gameState, setGameState] = useState<'lobby' | 'searching' | 'waiting' | 'countdown' | 'battle' | 'settlement'>('lobby');
+  // Game States
+  const [gameState, setGameState] = useState<
+    'lobby' | 'searching' | 'exercise_selection' | 'waiting_for_opponent' | 'calibration' | 'countdown' | 'battle' | 'settlement' | 'disconnected'
+  >('lobby');
 
-  // Battle Config & State
+  // Battle Room Config
   const [battleCode, setBattleCode] = useState<string>('FORGE-8842');
+  const [currentBattleId, setCurrentBattleId] = useState<string>('');
   const [sessionNonce, setSessionNonce] = useState<string>('NONCE-FGM-INIT');
   const [timeLeft, setTimeLeft] = useState<number>(60);
   const [preCountdown, setPreCountdown] = useState<number>(3);
-  const [isCopiedLink, setIsCopiedLink] = useState<boolean>(false);
   const [searchSecondsLeft, setSearchSecondsLeft] = useState<number>(20);
   const searchTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Participants
+  // Exercise Catalog & Selection State
+  const [exerciseCatalog, setExerciseCatalog] = useState<any[]>([]);
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState<boolean>(true);
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [selectionTimer, setSelectionTimer] = useState<number>(35);
+
+  // Players Selection & Ready State
+  const [mySelectedExerciseId, setMySelectedExerciseId] = useState<string>('pushups_classic');
+  const [rivalSelectedExerciseId, setRivalSelectedExerciseId] = useState<string | null>(null);
+  const [confirmedExerciseId, setConfirmedExerciseId] = useState<string>('pushups_classic');
+  const [isMyReady, setIsMyReady] = useState<boolean>(false);
+  const [isRivalReady, setIsRivalReady] = useState<boolean>(false);
+  const [premiumLockModal, setPremiumLockModal] = useState<string | null>(null);
+
+  // Opponent Meta
+  const [rivalAthlete, setRivalAthlete] = useState({
+    name: 'Норматив Кузні (Target Benchmark)',
+    wallet: 'FORGE-BENCHMARK-OFFICIAL-SYSTEM',
+    avatar: 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=160&h=160&fit=crop',
+    badge: 'Official Standard'
+  });
+
+  // Calibration State
+  const [calibrationStatus, setCalibrationStatus] = useState<'checking' | 'body_detected' | 'ready'>('checking');
+  const [calibrationProgress, setCalibrationProgress] = useState<number>(0);
+
+  // Battle Performance Stats
   const [myValidReps, setMyValidReps] = useState<number>(0);
   const [myRejectedReps, setMyRejectedReps] = useState<number>(0);
   const [myRomPercent, setMyRomPercent] = useState<number>(0);
@@ -71,30 +103,39 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
     proofHash: string;
   } | null>(null);
 
-  // Camera & Tracking
+  // Camera & Tracking Refs
   const [cameraStatus, setCameraStatus] = useState<'idle' | 'active' | 'denied' | 'simulation'>('idle');
-  const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [repFlash, setRepFlash] = useState<boolean>(false);
-
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
-  // Telemetry Ref
-  const lastRepTimeRef = useRef<number>(0);
-
-  // Intervals Ref
   const battleTimerRef = useRef<NodeJS.Timeout | null>(null);
   const rivalIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const myWallet = forgeGameStore.getWalletAddress();
-  const rivalAthlete = {
-    name: 'Норматив Кузні (Target Benchmark)',
-    wallet: 'FORGE-BENCHMARK-OFFICIAL-SYSTEM',
-    avatar: 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=160&h=160&fit=crop',
-    badge: 'Official Standard • 28 Reps / 60s'
-  };
+
+  // Load Exercise Catalog on Mount
+  useEffect(() => {
+    forgeGameStore.fetchBattleExercises().then((list) => {
+      setExerciseCatalog(list);
+      setIsLoadingCatalog(false);
+    });
+
+    forgeGameStore.requestSessionNonce().then(res => {
+      setSessionNonce(res.nonce);
+    });
+
+    setBattleCode(`FORGE-${Math.floor(1000 + Math.random() * 9000)}`);
+
+    return () => {
+      stopCameraStream();
+      if (battleTimerRef.current) clearInterval(battleTimerRef.current);
+      if (rivalIntervalRef.current) clearInterval(rivalIntervalRef.current);
+      if (searchTimerRef.current) clearInterval(searchTimerRef.current);
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    };
+  }, []);
 
   // Stop camera stream safely
   const stopCameraStream = useCallback(() => {
@@ -134,44 +175,37 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
     }
   }, [stopCameraStream]);
 
-  // Request fresh Anti-Replay nonce on mount
-  useEffect(() => {
-    forgeGameStore.requestSessionNonce().then(res => {
-      setSessionNonce(res.nonce);
-    });
-    setBattleCode(`FORGE-${Math.floor(1000 + Math.random() * 9000)}`);
-
-    return () => {
-      stopCameraStream();
-      if (battleTimerRef.current) clearInterval(battleTimerRef.current);
-      if (rivalIntervalRef.current) clearInterval(rivalIntervalRef.current);
-      if (searchTimerRef.current) clearInterval(searchTimerRef.current);
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    };
-  }, [stopCameraStream]);
-
-  // Matchmaking Search with 20s Timeout (#82)
+  // Matchmaking Search
   const startMatchmakingSearch = async () => {
     sound.playClick();
     setGameState('searching');
     setSearchSecondsLeft(20);
 
-    // Call backend matchmaking
-    forgeGameStore.startMatchmaking({
-      exercise: selectedExercise,
+    const res = await forgeGameStore.startMatchmaking({
+      exercise: mySelectedExerciseId,
       athleteName: 'Ти (Athlete)',
       athleteWallet: myWallet,
       roomCode: battleCode
     });
 
+    if (res && res.battleId) {
+      setCurrentBattleId(res.battleId);
+      if (res.opponent) {
+        setRivalAthlete({
+          name: res.opponent.name || 'Опонент',
+          wallet: res.opponent.wallet || 'FORGE-RIVAL-WAL',
+          avatar: res.opponent.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop',
+          badge: res.opponent.badge || 'Fighter'
+        });
+      }
+    }
+
     if (searchTimerRef.current) clearInterval(searchTimerRef.current);
     searchTimerRef.current = setInterval(async () => {
       setSearchSecondsLeft((prev) => {
         if (prev <= 1) {
-          // Timeout reached!
           if (searchTimerRef.current) clearInterval(searchTimerRef.current);
-          forgeGameStore.cancelMatchmaking(battleCode, selectedExercise);
-          setGameState('waiting');
+          setGameState('exercise_selection');
           return 0;
         }
         return prev - 1;
@@ -182,14 +216,132 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
   const cancelMatchmakingSearch = () => {
     sound.playClick();
     if (searchTimerRef.current) clearInterval(searchTimerRef.current);
-    forgeGameStore.cancelMatchmaking(battleCode, selectedExercise);
+    if (currentBattleId) {
+      forgeGameStore.leaveBattleRoom(currentBattleId, myWallet);
+    }
     setGameState('lobby');
   };
 
-  // Handle Pre-Battle Countdown (3, 2, 1, FIGHT!)
+  // Real-time synchronization of room state during Exercise Selection
+  useEffect(() => {
+    if (gameState !== 'exercise_selection' && gameState !== 'waiting_for_opponent') return;
+
+    const syncInterval = setInterval(async () => {
+      if (!currentBattleId) return;
+      const room = await forgeGameStore.fetchBattleRoomStatus(currentBattleId, myWallet);
+      if (!room) return;
+
+      if (room.status === 'DISCONNECTED') {
+        setGameState('disconnected');
+        clearInterval(syncInterval);
+        return;
+      }
+
+      setSelectionTimer(room.secondsLeft || 0);
+
+      // Determine who is P1 / P2
+      if (room.p1.userId === myWallet || !room.p2.userId) {
+        setRivalSelectedExerciseId(room.p2.selectedExerciseId);
+        setIsRivalReady(room.p2.isReady);
+      } else {
+        setRivalSelectedExerciseId(room.p1.selectedExerciseId);
+        setIsRivalReady(room.p1.isReady);
+      }
+
+      if (room.confirmedExerciseId) {
+        setConfirmedExerciseId(room.confirmedExerciseId);
+      }
+
+      // If room advances to confirmed or both ready -> start Camera Calibration
+      if (room.status === 'EXERCISE_CONFIRMED' || (room.p1.isReady && room.p2.isReady)) {
+        clearInterval(syncInterval);
+        sound.playLevelUp();
+        setGameState('calibration');
+        startCamera();
+      }
+    }, 1000);
+
+    return () => clearInterval(syncInterval);
+  }, [gameState, currentBattleId, myWallet, startCamera]);
+
+  // Handle Exercise Selection Click
+  const handleSelectExercise = async (exId: string, isPremium: boolean) => {
+    sound.playClick();
+    if (isPremium) {
+      // Check user premium entitlement
+      const res = await forgeGameStore.selectBattleExercise(currentBattleId || 'battle_temp', myWallet, exId);
+      if (!res.success && res.isPremiumRequired) {
+        sound.playClick();
+        setPremiumLockModal(exId);
+        return;
+      }
+    }
+
+    setMySelectedExerciseId(exId);
+    setIsMyReady(false); // Reset ready on new choice
+
+    if (currentBattleId) {
+      const res = await forgeGameStore.selectBattleExercise(currentBattleId, myWallet, exId);
+      if (res.confirmedExerciseId) {
+        setConfirmedExerciseId(res.confirmedExerciseId);
+      }
+    } else {
+      setConfirmedExerciseId(exId);
+    }
+  };
+
+  // Confirm Ready Button
+  const handleConfirmReady = async () => {
+    sound.playGong();
+    setIsMyReady(true);
+    setGameState('waiting_for_opponent');
+
+    if (currentBattleId) {
+      const res = await forgeGameStore.confirmBattleReady(currentBattleId, myWallet, true);
+      if (res.status === 'EXERCISE_CONFIRMED') {
+        setGameState('calibration');
+        startCamera();
+      }
+    } else {
+      // Offline / Solo rival fallback -> proceed immediately
+      setTimeout(() => {
+        setIsRivalReady(true);
+        setGameState('calibration');
+        startCamera();
+      }, 1000);
+    }
+  };
+
+  // Change exercise button
+  const handleChangeExercise = () => {
+    sound.playClick();
+    setIsMyReady(false);
+    setGameState('exercise_selection');
+    if (currentBattleId) {
+      forgeGameStore.confirmBattleReady(currentBattleId, myWallet, false);
+    }
+  };
+
+  // Calibration check phase
+  useEffect(() => {
+    if (gameState !== 'calibration') return;
+
+    let calCount = 0;
+    const interval = setInterval(() => {
+      calCount += 25;
+      setCalibrationProgress(calCount);
+      if (calCount >= 100) {
+        clearInterval(interval);
+        setCalibrationStatus('ready');
+      }
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, [gameState]);
+
+  // Launch Countdown (3, 2, 1, GO!)
   const launchCountdown = () => {
     sound.playClick();
-    startCamera();
     setGameState('countdown');
     setPreCountdown(3);
     setMyValidReps(0);
@@ -216,7 +368,6 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
 
   // 60-Second Battle Clock & Rival Simulation
   const startBattleClock = () => {
-    // 60s countdown
     battleTimerRef.current = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
@@ -225,7 +376,6 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
           return 0;
         }
 
-        // Sound cues at critical thresholds
         if (prev === 11) {
           sound.playChainTug();
         } else if (prev <= 4 && prev >= 2) {
@@ -236,46 +386,38 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
       });
     }, 1000);
 
-    // Rival realistic competitive pacing
-    const rivalTarget = 27 + Math.floor(Math.random() * 6); // target 27-32 reps in 60s
-    const paceIntervalMs = (60000 / rivalTarget) * (0.85 + Math.random() * 0.3);
-
+    // Competitive rival pacing
+    const rivalTarget = 27 + Math.floor(Math.random() * 6);
     rivalIntervalRef.current = setInterval(() => {
       setRivalValidReps((prev) => {
         if (prev >= 35) return prev;
-        // Occasionally simulate a rejected rep for rival (anti-perfection)
         if (Math.random() < 0.08) {
           setRivalRejectedReps(r => r + 1);
         }
         return prev + 1;
       });
-    }, paceIntervalMs);
+    }, 1800);
   };
 
-  // Register Valid Rep (with audio & visual feedback)
+  // Register verified rep
   const registerValidRep = useCallback(() => {
-    setMyValidReps((prev) => {
-      const next = prev + 1;
-      sound.playRepChime();
-      setRepFlash(true);
-      setTimeout(() => setRepFlash(false), 200);
-      return next;
-    });
+    setMyValidReps((prev) => prev + 1);
     setMyRejectCause(null);
+    sound.playTrophy();
   }, []);
 
-  // Register Rejected Rep (ROM < 80%, tempo too fast, lack of lockout)
   const registerRejectedRep = useCallback((reason: string) => {
     setMyRejectedReps((prev) => prev + 1);
     setMyRejectCause(reason);
     sound.playCoachWhistle();
   }, []);
 
-  // Computer Vision Processing Frame Loop with Biomechanical Pose Verifier
+  // Pose Tracking Loop during Active Battle
   useEffect(() => {
     if (gameState !== 'battle') return;
 
-    poseService.setExercise(selectedExercise);
+    // Set PoseDetector to confirmed exercise
+    poseService.setExercise(confirmedExerciseId as any);
     poseService.resetCounters();
 
     const unsubRep = poseService.onRep(() => {
@@ -335,9 +477,9 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
       unsubFrame();
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [gameState, selectedExercise, registerValidRep, registerRejectedRep]);
+  }, [gameState, confirmedExerciseId, registerValidRep, registerRejectedRep]);
 
-  // Finish Battle & Settle on Solana
+  // Finish Battle & Settle Results
   const finishBattle = async () => {
     if (rivalIntervalRef.current) clearInterval(rivalIntervalRef.current);
     if (battleTimerRef.current) clearInterval(battleTimerRef.current);
@@ -348,656 +490,420 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
 
     setGameState('settlement');
 
-    let winnerId: string | 'draw' = 'draw';
-    if (myValidReps > rivalValidReps) {
-      winnerId = 'my_athlete';
-    } else if (rivalValidReps > myValidReps) {
-      winnerId = 'rival_athlete';
-    }
+    const isWin = myValidReps > rivalValidReps;
+    const isDraw = myValidReps === rivalValidReps;
+    const winnerId = isWin ? myWallet : isDraw ? 'draw' : rivalAthlete.wallet;
 
-    // Call Duel Settle Endpoint
-    const settlement = await forgeGameStore.settleDuel({
-      battleId: battleCode,
-      exercise: selectedExercise,
+    const settlement = await forgeGameStore.settleBattleDuel({
+      battleId: currentBattleId || `battle_${Date.now()}`,
+      exercise: confirmedExerciseId as any,
       player1: {
-        id: 'my_athlete',
-        name: 'Ви (Атлет Forge)',
-        wallet: myWallet,
-        validReps: myValidReps,
-        rejectedReps: myRejectedReps
+        id: myWallet,
+        name: 'Ти (Athlete)',
+        reps: myValidReps
       },
       player2: {
-        id: 'rival_athlete',
+        id: rivalAthlete.wallet,
         name: rivalAthlete.name,
-        wallet: rivalAthlete.wallet,
-        validReps: rivalValidReps,
-        rejectedReps: rivalRejectedReps
+        reps: rivalValidReps
       },
       winnerId
     });
 
-    setSettlementResult({
-      winnerId,
-      winnerReps: winnerId === 'my_athlete' ? myValidReps : rivalValidReps,
-      solanaTxSignature: settlement.solanaTx.signature,
-      solanaExplorerUrl: settlement.solanaTx.explorerUrl,
-      proofHash: settlement.proofHash
-    });
+    setSettlementResult(settlement);
   };
 
-  const copyShareLink = () => {
-    const url = `${window.location.origin}/#duel-${battleCode}`;
-    navigator.clipboard.writeText(url);
-    setIsCopiedLink(true);
-    sound.playClick();
-    setTimeout(() => setIsCopiedLink(false), 2500);
-  };
+  // Filter Catalog
+  const filteredExercises = exerciseCatalog.filter((ex) => {
+    if (selectedCategory !== 'all' && ex.category !== selectedCategory) {
+      return false;
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      return (
+        ex.name.toLowerCase().includes(q) ||
+        ex.description.toLowerCase().includes(q)
+      );
+    }
+    return true;
+  });
 
-  // Dynamic Tug of War Momentum Bar (-50 to +50)
-  const repDiff = myValidReps - rivalValidReps;
-  const tugOfWarPercent = Math.max(10, Math.min(90, 50 + repDiff * 4));
+  const activeConfirmedMeta = exerciseCatalog.find((e) => e.id === confirmedExerciseId) || exerciseCatalog[0] || {
+    name: 'Класичні віджимання',
+    description: 'Базова вправа'
+  };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
-      {/* Lobby / Configuration Screen */}
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      {/* ========================================================================= */}
+      {/* 1. LOBBY STATE */}
+      {/* ========================================================================= */}
       {gameState === 'lobby' && (
         <div className="space-y-8">
-          {/* Header */}
-          <div className="text-center space-y-3">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/10 border border-red-500/30 text-red-400 text-xs font-mono tracking-wider uppercase">
-              <Swords className="w-3.5 h-3.5" />
-              <span>Street Fighter Meets Strava</span>
-            </div>
-
-            <h1 className="text-4xl md:text-6xl font-black tracking-tight text-white uppercase italic">
-              FORGE BATTLE — 60s DUEL
+          <div className="text-center max-w-2xl mx-auto space-y-3">
+            <span className="text-xs font-bold uppercase tracking-wider text-amber-400 bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/30">
+              Battle Arena • 1v1 Verified Reps
+            </span>
+            <h1 className="text-3xl sm:text-4xl font-black text-neutral-100 font-epic uppercase tracking-tight">
+              Битва Таборів та Камера-Дуелі
             </h1>
-
-            <p className="text-sm md:text-base text-neutral-400 max-w-xl mx-auto">
-              60 секунд максимальної віддачі перед камерою. Computer Vision рахує тільки бездоганні повторення. Результат дуелі карбується в Solana.
+            <p className="text-xs sm:text-sm text-neutral-400">
+              Оберіть суперника, узгодьте вправу та доведіть силу у 60-секундному камера-спринті з компʼютерним аналізом кутів рухів.
             </p>
           </div>
 
-          {/* Sponsor Challenge Banner */}
-          <div className="rounded-3xl border border-amber-500/30 bg-gradient-to-r from-amber-950/40 via-neutral-900 to-neutral-900 p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-3xl flex-shrink-0">
-                {ACTIVE_SPONSOR_CHALLENGE.sponsorLogo}
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-mono uppercase tracking-wider text-amber-400 font-bold px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
-                    Sponsor Challenge
-                  </span>
-                  <span className="text-xs text-neutral-400">
-                    {ACTIVE_SPONSOR_CHALLENGE.sponsorName}
-                  </span>
-                </div>
-                <h3 className="text-lg font-black text-white mt-1">
-                  {ACTIVE_SPONSOR_CHALLENGE.title} • {ACTIVE_SPONSOR_CHALLENGE.rewardPool}
-                </h3>
-                <p className="text-xs text-neutral-400 mt-0.5">
-                  {ACTIVE_SPONSOR_CHALLENGE.description}
-                </p>
-              </div>
-            </div>
-            <div className="flex-shrink-0 px-4 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 font-mono text-xs font-bold text-center">
-              Кваліфікація: &gt;={ACTIVE_SPONSOR_CHALLENGE.qualifyingReps} репів
-            </div>
-          </div>
-
-          {/* Exercise Selector */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <button
-              onClick={() => { setSelectedExercise('pushups'); sound.playClick(); }}
-              className={`p-6 rounded-3xl border text-left transition-all relative overflow-hidden group ${
-                selectedExercise === 'pushups'
-                  ? 'bg-amber-500/10 border-amber-500/80 shadow-xl shadow-amber-950/40'
-                  : 'bg-neutral-900/60 border-neutral-800 hover:border-neutral-700'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-3xl">⚔️</span>
-                <span className="text-xs font-mono uppercase tracking-wider text-amber-400 font-bold">
-                  60s Push-up Duel
-                </span>
-              </div>
-              <h3 className="text-xl font-black text-white mb-1">Віджимання від підлоги</h3>
-              <p className="text-xs text-neutral-400">
-                Контроль кута ліктя, торкання грудьми (&gt;85% ROM) та повне розгинання у верхній точці.
-              </p>
-            </button>
-
-            <button
-              onClick={() => { setSelectedExercise('squats'); sound.playClick(); }}
-              className={`p-6 rounded-3xl border text-left transition-all relative overflow-hidden group ${
-                selectedExercise === 'squats'
-                  ? 'bg-orange-500/10 border-orange-500/80 shadow-xl shadow-orange-950/40'
-                  : 'bg-neutral-900/60 border-neutral-800 hover:border-neutral-700'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-3xl">🛡️</span>
-                <span className="text-xs font-mono uppercase tracking-wider text-orange-400 font-bold">
-                  60s Squat Duel
-                </span>
-              </div>
-              <h3 className="text-xl font-black text-white mb-1">Глибокі присідання</h3>
-              <p className="text-xs text-neutral-400">
-                Таз опускається нижче лінії колін. Повний локаут кульшового та колінного суглобів.
-              </p>
-            </button>
-
-            <button
-              onClick={() => { setSelectedExercise('pullups'); sound.playClick(); }}
-              className={`p-6 rounded-3xl border text-left transition-all relative overflow-hidden group ${
-                selectedExercise === 'pullups'
-                  ? 'bg-cyan-500/10 border-cyan-500/80 shadow-xl shadow-cyan-950/40'
-                  : 'bg-neutral-900/60 border-neutral-800 hover:border-neutral-700'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-3xl">🦅</span>
-                <span className="text-xs font-mono uppercase tracking-wider text-cyan-400 font-bold">
-                  60s Pull-up Duel
-                </span>
-              </div>
-              <h3 className="text-xl font-black text-white mb-1">Підтягування на турніку</h3>
-              <p className="text-xs text-neutral-400">
-                Повний вис у нижній точці та чітка фіксація підборіддя строго над перекладиною.
-              </p>
-            </button>
-          </div>
-
-          {/* Opponent Card & Battle Launch */}
-          <div className="bg-neutral-900/80 border border-neutral-800 rounded-3xl p-6 md:p-8 space-y-6">
-            <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-              {/* Player 1 (You) */}
-              <div className="flex items-center gap-4 w-full md:w-auto">
-                <div className="w-16 h-16 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-3xl flex-shrink-0">
-                  💪
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+            {/* Find Match Card */}
+            <div className="rounded-3xl border border-amber-500/30 bg-neutral-900/80 p-8 flex flex-col justify-between space-y-6 hover:border-amber-500/60 transition-all">
+              <div className="space-y-4">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center">
+                  <Swords className="w-6 h-6" />
                 </div>
                 <div>
-                  <span className="text-[11px] font-mono uppercase tracking-wider text-amber-400 font-bold block">
-                    Player 1 (You)
-                  </span>
-                  <h3 className="text-lg font-bold text-white">Кузнець Forge</h3>
-                  <span className="text-xs font-mono text-neutral-500">
-                    {myWallet.substring(0, 8)}...{myWallet.substring(myWallet.length - 4)}
-                  </span>
+                  <h3 className="text-xl font-bold text-neutral-100">Матчмейкінг 1v1</h3>
+                  <p className="text-xs text-neutral-400 mt-1">
+                    Автоматичний пошук рівного за рангом атлета або дуель проти офіційного нормативу Кузні.
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-2 text-xs">
+                  <div className="flex justify-between text-neutral-300">
+                    <span>Кімната дуелі:</span>
+                    <span className="font-mono text-amber-400 font-bold">#{battleCode}</span>
+                  </div>
+                  <div className="flex justify-between text-neutral-400">
+                    <span>Тривалість раунду:</span>
+                    <span className="font-mono font-bold text-neutral-200">60 секунд</span>
+                  </div>
+                  <div className="flex justify-between text-neutral-400">
+                    <span>Верифікація:</span>
+                    <span className="text-emerald-400 font-semibold">AI Camera Angles</span>
+                  </div>
                 </div>
               </div>
 
-              {/* VS Badge */}
-              <div className="w-12 h-12 rounded-full bg-red-600/20 border border-red-500/40 flex items-center justify-center font-black text-red-400 italic text-lg shadow-lg shadow-red-950/50">
-                VS
-              </div>
-
-              {/* Player 2 (Rival) */}
-              <div className="flex items-center gap-4 w-full md:w-auto justify-end">
-                <div className="text-right">
-                  <span className="text-[11px] font-mono uppercase tracking-wider text-red-400 font-bold block">
-                    Player 2 (Contender)
-                  </span>
-                  <h3 className="text-lg font-bold text-white">{rivalAthlete.name}</h3>
-                  <span className="text-xs font-mono text-neutral-500">
-                    {rivalAthlete.badge}
-                  </span>
-                </div>
-                <img 
-                  src={rivalAthlete.avatar} 
-                  alt={rivalAthlete.name} 
-                  className="w-16 h-16 rounded-2xl border border-red-500/40 object-cover flex-shrink-0"
-                />
-              </div>
+              <button
+                onClick={startMatchmakingSearch}
+                className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-neutral-950 font-extrabold text-sm shadow-[0_0_25px_rgba(245,158,11,0.3)] transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Users className="w-4 h-4" />
+                Знайти суперника (Matchmaking)
+              </button>
             </div>
 
-            {/* Launch & Share Room Code */}
-            <div className="pt-6 border-t border-neutral-800 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-2 w-full sm:w-auto">
-                <button
-                  onClick={copyShareLink}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-neutral-950 border border-neutral-800 hover:border-neutral-700 text-xs font-mono text-neutral-300 transition-colors"
-                >
-                  <Share2 className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Кімната: #{battleCode}</span>
-                  {isCopiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-neutral-500" />}
-                </button>
+            {/* Direct Code / Challenge Card */}
+            <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-8 flex flex-col justify-between space-y-6">
+              <div className="space-y-4">
+                <div className="w-12 h-12 rounded-2xl bg-neutral-800 border border-neutral-700 text-neutral-300 flex items-center justify-center">
+                  <Share2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-neutral-100">Виклик по посиланню</h3>
+                  <p className="text-xs text-neutral-400 mt-1">
+                    Створіть приватний код та надішліть його другу для прямого поєдинку.
+                  </p>
+                </div>
 
-                <span className="text-xs text-neutral-500 font-mono hidden md:inline">
-                  Nonce: {sessionNonce.substring(0, 16)}...
-                </span>
+                <div className="p-3.5 rounded-2xl bg-neutral-950 border border-neutral-800 flex items-center justify-between">
+                  <span className="text-xs font-mono text-neutral-300">
+                    {window.location.origin}/#duel-{battleCode}
+                  </span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}/#duel-${battleCode}`);
+                      sound.playClick();
+                    }}
+                    className="p-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium cursor-pointer"
+                  >
+                    Копіювати
+                  </button>
+                </div>
               </div>
 
-              <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
-                <button
-                  onClick={startMatchmakingSearch}
-                  className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-4 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-black text-sm tracking-wider uppercase border border-amber-500/40 transition-all cursor-pointer"
-                >
-                  <Search className="w-4 h-4" />
-                  <span>Шукати суперника (20с)</span>
-                </button>
-
-                <button
-                  onClick={launchCountdown}
-                  className="w-full sm:w-auto flex items-center justify-center gap-3 px-8 py-4 rounded-2xl bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 text-white font-black text-base tracking-wider uppercase shadow-xl shadow-orange-950/60 hover:opacity-95 transition-all transform active:scale-95 cursor-pointer"
-                >
-                  <Swords className="w-5 h-5" />
-                  <span>Розпочати 60s Бій</span>
-                </button>
-              </div>
+              <button
+                onClick={startMatchmakingSearch}
+                className="w-full py-4 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-sm transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                Створити приватну дуель
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Searching Matchmaking Screen (#82) */}
+      {/* ========================================================================= */}
+      {/* 2. SEARCHING STATE */}
+      {/* ========================================================================= */}
       {gameState === 'searching' && (
-        <div className="flex flex-col items-center justify-center py-20 px-4 text-center space-y-6 rounded-3xl bg-neutral-900/90 border border-amber-500/30">
-          <div className="relative w-24 h-24 flex items-center justify-center">
-            <div className="absolute inset-0 rounded-full border-4 border-amber-500/20 animate-ping" />
-            <div className="absolute inset-2 rounded-full border-2 border-dashed border-amber-400 animate-spin" />
-            <Swords className="w-10 h-10 text-amber-400" />
+        <div className="max-w-md mx-auto text-center space-y-6 py-12">
+          <div className="relative w-20 h-20 mx-auto">
+            <div className="absolute inset-0 rounded-full border-4 border-amber-500/20 border-t-amber-500 animate-spin" />
+            <div className="absolute inset-0 flex items-center justify-center text-amber-400 font-extrabold font-mono text-xl">
+              {searchSecondsLeft}s
+            </div>
           </div>
 
           <div className="space-y-2">
-            <span className="text-xs font-mono tracking-widest uppercase text-amber-400 font-bold">
-              Пошук суперника в мережі Solana
-            </span>
-            <h2 className="text-2xl sm:text-3xl font-black text-white">
-              Підбір суперника для 60s дуелі...
-            </h2>
-            <p className="text-neutral-400 text-xs sm:text-sm max-w-md mx-auto">
-              Шукаємо атлета рівного рангу в кімнаті #{battleCode}. Тайм-аут пошуку:
+            <h2 className="text-2xl font-bold text-neutral-100 font-epic uppercase">Шукаємо суперника...</h2>
+            <p className="text-xs text-neutral-400">
+              Пошук активного атлета в кімнаті #{battleCode}. Автоматичний підбір за рангом.
             </p>
-          </div>
-
-          <div className="text-5xl font-mono font-black text-amber-400">
-            {searchSecondsLeft}s
           </div>
 
           <button
             onClick={cancelMatchmakingSearch}
-            className="px-6 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white text-xs font-bold border border-neutral-700 cursor-pointer transition-all"
+            className="px-6 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold cursor-pointer"
           >
             Скасувати пошук
           </button>
         </div>
       )}
 
-      {/* Waiting Screen after 20s Timeout (#82) */}
-      {gameState === 'waiting' && (
-        <div className="flex flex-col items-center justify-center py-16 px-4 text-center space-y-6 rounded-3xl bg-neutral-900/90 border border-neutral-800">
-          <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
-            <Users className="w-8 h-8" />
-          </div>
+      {/* ========================================================================= */}
+      {/* 3. EXERCISE SELECTION SCREEN (MAIN FEATURE) */}
+      {/* ========================================================================= */}
+      {(gameState === 'exercise_selection' || gameState === 'waiting_for_opponent') && (
+        <BattleExerciseSelection
+          onBackToArena={() => {
+            sound.playClick();
+            setGameState('lobby');
+          }}
+          onExerciseConfirmed={(selectedEx: Exercise) => {
+            sound.playAnvilHit();
+            setConfirmedExerciseId(selectedEx.id);
+            setMySelectedExerciseId(selectedEx.id);
+            setGameState('calibration');
+            startCamera();
+          }}
+          onNavigateToPremium={onNavigateToBilling}
+        />
+      )}
 
-          <div className="space-y-2 max-w-lg">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-bold uppercase">
-              Час очікування вичерпано (20с)
+      {/* Premium Lock Alert Modal */}
+      {premiumLockModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl border border-amber-500/40 bg-neutral-950 p-6 space-y-4 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
+              <Lock className="w-6 h-6" />
             </div>
-            <h2 className="text-2xl font-black text-white">
-              Суперника в черзі не знайдено
+            <h3 className="text-lg font-bold text-neutral-100">Forge Premium Вправа</h3>
+            <p className="text-xs text-neutral-400">
+              Ця вправа вимагає підтвердженого статусу Forge Premium для використання у батлах.
+            </p>
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setPremiumLockModal(null)}
+                className="flex-1 py-2.5 rounded-xl bg-neutral-900 text-neutral-400 text-xs font-bold"
+              >
+                Закрити
+              </button>
+              <button
+                onClick={() => {
+                  setPremiumLockModal(null);
+                  if (onNavigateToBilling) onNavigateToBilling();
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-amber-500 text-neutral-950 text-xs font-bold"
+              >
+                Активувати Premium
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 4. CALIBRATION STATE */}
+      {/* ========================================================================= */}
+      {gameState === 'calibration' && (
+        <div className="max-w-xl mx-auto space-y-6 text-center py-6">
+          <div className="space-y-2">
+            <span className="text-xs font-bold uppercase tracking-wider text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/30">
+              Калібрування Позиції
+            </span>
+            <h2 className="text-2xl font-bold text-neutral-100 font-epic">
+              Камера-Верифікація: {activeConfirmedMeta.name}
             </h2>
-            <p className="text-neutral-400 text-xs sm:text-sm">
-              Ніхто з атлетів не зайшов у кімнату #{battleCode} протягом 20 секунд. Ви можете пройти 60s спрінт проти офіційного нормативу або спробувати пошук знову.
+            <p className="text-xs text-neutral-400">
+              Станьте перед камерою так, щоб усе тіло увійшло в кадр. Система перевіряє лінійність скелета.
             </p>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
-            <button
-              onClick={launchCountdown}
-              className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 text-white font-black text-sm uppercase tracking-wider shadow-lg shadow-orange-950/40 hover:opacity-95 transition-all cursor-pointer flex items-center justify-center gap-2"
-            >
-              <Swords className="w-4 h-4" />
-              <span>Старт: 60s Норматив</span>
-            </button>
+          <div className="relative aspect-video max-w-sm mx-auto rounded-3xl overflow-hidden border-2 border-amber-500/50 bg-neutral-950 shadow-2xl">
+            <video ref={videoRef} className="w-full h-full object-cover hidden" playsInline />
+            <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
-            <button
-              onClick={startMatchmakingSearch}
-              className="w-full sm:w-auto px-5 py-3 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-amber-300 text-xs font-bold border border-neutral-700 transition-all cursor-pointer"
-            >
-              Спробувати пошук знову
-            </button>
-
-            <button
-              onClick={() => {
-                sound.playClick();
-                setGameState('lobby');
-              }}
-              className="w-full sm:w-auto px-4 py-3 rounded-2xl bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-white text-xs font-bold transition-all cursor-pointer"
-            >
-              Повернутися в лобі
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Pre-Battle Countdown Screen (3, 2, 1...) */}
-      {gameState === 'countdown' && (
-        <div className="flex flex-col items-center justify-center py-24 space-y-6">
-          <span className="text-xs font-mono tracking-widest uppercase text-amber-400">
-            Калібрування камери & Liveness Check
-          </span>
-          <div className="text-8xl md:text-9xl font-black text-white italic animate-bounce font-mono">
-            {preCountdown}
-          </div>
-          <p className="text-neutral-400 text-sm italic">
-            Займіть вихідну позицію перед камерою. Повна амплітуда зараховується автоматично!
-          </p>
-        </div>
-      )}
-
-      {/* Active Battle Arena (Street Fighter HUD) */}
-      {gameState === 'battle' && (
-        <div className="space-y-4">
-          {/* Top Fighting Game Header Bar */}
-          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-4 md:p-6 shadow-2xl relative overflow-hidden">
-            {/* Center 60s Clock */}
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-full bg-red-500 animate-ping" />
-                <span className="font-mono text-xs font-bold uppercase text-red-400 tracking-wider">
-                  LIVE 60s DUEL • {selectedExercise.toUpperCase()}
-                </span>
-              </div>
-
-              {/* Big Street Fighter Clock */}
-              <div className={`px-6 py-1.5 rounded-2xl border font-black text-3xl md:text-4xl font-mono tracking-tight ${
-                timeLeft <= 10 
-                  ? 'bg-red-600 text-white border-red-500 animate-pulse' 
-                  : 'bg-neutral-950 text-amber-400 border-neutral-800'
-              }`}>
-                {timeLeft}s
-              </div>
-
-              <div className="text-xs font-mono text-neutral-400 flex items-center gap-2">
-                <span>NONCE: #{sessionNonce.substring(10, 18)}</span>
-              </div>
-            </div>
-
-            {/* Dynamic Tug of War Momentum Bar */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider font-mono">
-                <span className="text-amber-400 flex items-center gap-1.5">
-                  Ви: {myValidReps} reps
-                </span>
-                <span className="text-red-400 flex items-center gap-1.5">
-                  {rivalAthlete.name}: {rivalValidReps} reps
-                </span>
-              </div>
-
-              <div className="h-4 w-full bg-neutral-950 rounded-full overflow-hidden border border-neutral-800 p-0.5 relative">
-                <div 
-                  className="h-full bg-gradient-to-r from-amber-500 via-orange-500 to-red-600 rounded-full transition-all duration-300"
-                  style={{ width: `${tugOfWarPercent}%` }}
-                />
-                <div 
-                  className="absolute top-0 bottom-0 w-1 bg-white shadow-md shadow-white transition-all duration-300"
-                  style={{ left: `${tugOfWarPercent}%` }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Duel Split View: Player 1 (You with Camera) vs Player 2 (Rival) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Player 1: Camera View + Computer Vision HUD */}
-            <div className={`relative bg-neutral-950 border-2 rounded-3xl overflow-hidden min-h-[380px] flex flex-col justify-between p-4 transition-all ${
-              repFlash ? 'border-amber-400 shadow-2xl shadow-amber-500/30' : 'border-neutral-800'
-            }`}>
-              {/* Webcam Feed */}
-              <video 
-                ref={videoRef}
-                playsInline 
-                muted 
-                className="absolute inset-0 w-full h-full object-cover -scale-x-100 opacity-80"
-              />
-              <canvas ref={canvasRef} className="hidden" />
-
-              {/* Simulation Banner if Camera blocked */}
-              {cameraStatus === 'simulation' && (
-                <div className="absolute inset-0 bg-neutral-950/90 flex flex-col items-center justify-center p-6 text-center z-10">
-                  <CameraOff className="w-10 h-10 text-amber-500 mb-2" />
-                  <h4 className="text-sm font-bold text-white mb-1">Демо-режим сенсора</h4>
-                  <p className="text-xs text-neutral-400 mb-4 max-w-xs">
-                    Веб-камера недоступна у поточному вікні. Використовуйте кнопки для ручної верифікації повторень або відкрийте додаток у новій вкладці.
-                  </p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={registerValidRep}
-                      className="px-4 py-2 rounded-xl bg-amber-500 text-neutral-950 font-bold text-xs"
-                    >
-                      +1 Зараховане (100% ROM)
-                    </button>
-                    <button
-                      onClick={() => registerRejectedRep('Неповна амплітуда')}
-                      className="px-4 py-2 rounded-xl bg-red-600/30 border border-red-500/40 text-red-300 font-bold text-xs"
-                    >
-                      Відхилити (ROM &lt; 80%)
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Player 1 Top HUD */}
-              <div className="relative z-10 flex items-center justify-between bg-neutral-950/80 backdrop-blur-md px-3 py-2 rounded-2xl border border-neutral-800/80">
-                <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" />
-                  <span className="text-xs font-bold text-white">Ви (Кузнець)</span>
-                </div>
-                <div className="text-[11px] font-mono text-neutral-400">
-                  ROM: <span className="text-amber-400 font-bold">{myRomPercent}%</span>
-                </div>
-              </div>
-
-              {/* Center Big Valid Reps Display */}
-              <div className="relative z-10 text-center my-auto">
-                <span className="text-7xl md:text-8xl font-black text-amber-400 font-mono tracking-tight drop-shadow-2xl">
-                  {myValidReps}
-                </span>
-                <span className="block text-xs font-mono uppercase tracking-widest text-neutral-300 font-bold">
-                  VALID REPS
-                </span>
-
-                {/* Real-time Rejection Cause Banner */}
-                {myRejectCause && (
-                  <div className="inline-flex items-center gap-1.5 mt-2 px-3 py-1 rounded-full bg-red-600/90 text-white text-xs font-bold animate-shake">
-                    <AlertTriangle className="w-3.5 h-3.5" />
-                    <span>{myRejectCause}</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Player 1 Bottom Badges */}
-              <div className="relative z-10 flex items-center justify-between text-xs font-mono">
-                <span className="text-neutral-400 bg-neutral-950/80 px-2.5 py-1 rounded-xl border border-neutral-800">
-                  Відхилено: <span className="text-red-400 font-bold">{myRejectedReps}</span>
-                </span>
-                <span className="text-neutral-400 bg-neutral-950/80 px-2.5 py-1 rounded-xl border border-neutral-800">
-                  Coach Arno: «{myRomPercent > 80 ? 'Повне розгинання.' : 'Глибше.'}»
-                </span>
-              </div>
-            </div>
-
-            {/* Player 2: Rival Live Contender HUD */}
-            <div className="relative bg-neutral-950 border-2 border-neutral-800 rounded-3xl overflow-hidden min-h-[380px] flex flex-col justify-between p-4">
-              <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/80 to-transparent" />
-              <img 
-                src={rivalAthlete.avatar} 
-                alt="Rival"
-                className="absolute inset-0 w-full h-full object-cover opacity-20 filter grayscale"
-              />
-
-              {/* Player 2 Top HUD */}
-              <div className="relative z-10 flex items-center justify-between bg-neutral-950/80 backdrop-blur-md px-3 py-2 rounded-2xl border border-neutral-800/80">
-                <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-                  <span className="text-xs font-bold text-white">{rivalAthlete.name}</span>
-                </div>
-                <div className="text-[11px] font-mono text-neutral-400">
-                  Ранг: <span className="text-red-400 font-bold">#4 Rival</span>
-                </div>
-              </div>
-
-              {/* Center Big Rival Reps Display */}
-              <div className="relative z-10 text-center my-auto">
-                <span className="text-7xl md:text-8xl font-black text-red-500 font-mono tracking-tight drop-shadow-2xl">
-                  {rivalValidReps}
-                </span>
-                <span className="block text-xs font-mono uppercase tracking-widest text-neutral-400 font-bold">
-                  VALID REPS
-                </span>
-              </div>
-
-              {/* Player 2 Bottom Badges */}
-              <div className="relative z-10 flex items-center justify-between text-xs font-mono">
-                <span className="text-neutral-400 bg-neutral-950/80 px-2.5 py-1 rounded-xl border border-neutral-800">
-                  Відхилено: <span className="text-red-400 font-bold">{rivalRejectedReps}</span>
-                </span>
-                <span className="text-neutral-400 bg-neutral-950/80 px-2.5 py-1 rounded-xl border border-neutral-800">
-                  Status: Contending
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Battle Finished & Secured on Solana Screen */}
-      {gameState === 'settlement' && settlementResult && (
-        <div className="bg-gradient-to-b from-neutral-900 via-neutral-900/90 to-neutral-950 border border-neutral-800 rounded-3xl p-6 md:p-10 space-y-8 shadow-2xl">
-          {/* Winner Title */}
-          <div className="text-center space-y-3">
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-mono tracking-wider uppercase">
-              <Shield className="w-4 h-4" />
-              <span>BATTLE RESULT SECURED ON SOLANA</span>
-            </div>
-
-            <h2 className="text-3xl md:text-5xl font-black text-white tracking-tight uppercase italic">
-              {settlementResult.winnerId === 'my_athlete' 
-                ? '🏆 ПЕРЕМОГА У 60-СЕКУНДНОМУ БОЇ!' 
-                : settlementResult.winnerId === 'rival_athlete'
-                  ? 'СУПЕРНИК ВЗЯВ ВЕРХ'
-                  : 'НІЧИЯ — БЕЗКОМПРОМІСНИЙ БІЙ'}
-            </h2>
-
-            <p className="text-lg text-amber-400 font-bold font-mono">
-              WINNER: {settlementResult.winnerReps} VERIFIED REPETITIONS
-            </p>
-          </div>
-
-          {/* Verification Comparison Table */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto">
-            <div className={`p-5 rounded-2xl border ${
-              settlementResult.winnerId === 'my_athlete' 
-                ? 'bg-amber-500/15 border-amber-500/60' 
-                : 'bg-neutral-950 border-neutral-800'
-            }`}>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-bold text-white">Player 1 (Ви)</span>
-                {settlementResult.winnerId === 'my_athlete' && (
-                  <span className="text-xs bg-amber-400 text-neutral-950 px-2 py-0.5 rounded font-black">
-                    WINNER
-                  </span>
-                )}
-              </div>
-              <div className="text-3xl font-black font-mono text-white mb-1">
-                {myValidReps} <span className="text-xs font-normal text-neutral-400">Valid Reps</span>
-              </div>
-              <div className="text-xs font-mono text-red-400">
-                Rejected: {myRejectedReps} reps
-              </div>
-            </div>
-
-            <div className={`p-5 rounded-2xl border ${
-              settlementResult.winnerId === 'rival_athlete' 
-                ? 'bg-red-500/15 border-red-500/60' 
-                : 'bg-neutral-950 border-neutral-800'
-            }`}>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-bold text-white">Player 2 ({rivalAthlete.name})</span>
-                {settlementResult.winnerId === 'rival_athlete' && (
-                  <span className="text-xs bg-red-400 text-neutral-950 px-2 py-0.5 rounded font-black">
-                    WINNER
-                  </span>
-                )}
-              </div>
-              <div className="text-3xl font-black font-mono text-white mb-1">
-                {rivalValidReps} <span className="text-xs font-normal text-neutral-400">Valid Reps</span>
-              </div>
-              <div className="text-xs font-mono text-red-400">
-                Rejected: {rivalRejectedReps} reps
-              </div>
-            </div>
-          </div>
-
-          {/* Biomechanical Verification Certificate Card */}
-          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-5 max-w-2xl mx-auto space-y-3 font-mono text-xs">
-            <div className="flex items-center justify-between text-neutral-400 pb-2 border-b border-neutral-900">
+            {/* Skeleton Status Banner */}
+            <div className="absolute bottom-3 left-3 right-3 p-2.5 rounded-xl bg-black/80 backdrop-blur-md border border-emerald-500/40 text-emerald-400 text-xs font-bold flex items-center justify-between">
               <span className="flex items-center gap-1.5">
-                <Shield className="w-4 h-4 text-amber-400" />
-                Forge Biomechanical Attestation
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                Скелет виявлено в кадрі
               </span>
-              <span className="text-emerald-400 font-bold">VERIFIED (100% Truth Engine)</span>
+              <span className="font-mono">{calibrationProgress}%</span>
+            </div>
+          </div>
+
+          <button
+            onClick={launchCountdown}
+            className="px-8 py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-neutral-950 font-extrabold text-sm shadow-[0_0_25px_rgba(245,158,11,0.4)] transition-all cursor-pointer"
+          >
+            Розпочати 60s Спринт (Countdown)
+          </button>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 5. COUNTDOWN & ACTIVE BATTLE */}
+      {/* ========================================================================= */}
+      {(gameState === 'countdown' || gameState === 'battle') && (
+        <div className="space-y-6">
+          {/* Top HUD Stats */}
+          <div className="grid grid-cols-3 items-center gap-4 p-4 rounded-2xl bg-neutral-900 border border-neutral-800">
+            {/* My Score */}
+            <div className="text-left">
+              <span className="text-[10px] font-bold uppercase text-amber-400 block">Ваші Верифіковані Репи</span>
+              <div className="text-3xl font-black text-amber-300 font-mono">{myValidReps}</div>
+              <span className="text-[10px] text-rose-400 font-medium">Відхилено: {myRejectedReps}</span>
             </div>
 
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-neutral-400">
-                <span>Verifier ID:</span>
-                <span className="text-neutral-300">ForgeKinematicAuthority_v2</span>
+            {/* Battle Timer */}
+            <div className="text-center">
+              <div className="text-2xl font-black text-neutral-100 font-mono tracking-wider">
+                00:{timeLeft < 10 ? `0${timeLeft}` : timeLeft}
               </div>
-              <div className="flex justify-between text-neutral-400">
-                <span>Proof Hash:</span>
-                <span className="text-neutral-300 truncate max-w-[240px]">{settlementResult.proofHash}</span>
-              </div>
-              <div className="flex justify-between text-neutral-400">
-                <span>Blockchain Sync:</span>
-                <span className="text-neutral-400">Off-chain verified (Phase 2 pending)</span>
-              </div>
+              <span className="text-[10px] font-bold text-neutral-500 uppercase">{activeConfirmedMeta.name}</span>
             </div>
 
-            {settlementResult.solanaExplorerUrl && (
-              <div className="pt-2 border-t border-neutral-900 flex justify-end">
-                <a
-                  href={settlementResult.solanaExplorerUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 font-bold transition-colors"
-                >
-                  <span>Explorer</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
+            {/* Rival Score */}
+            <div className="text-right">
+              <span className="text-[10px] font-bold uppercase text-neutral-400 block">{rivalAthlete.name}</span>
+              <div className="text-3xl font-black text-neutral-200 font-mono">{rivalValidReps}</div>
+              <span className="text-[10px] text-neutral-500 font-medium">Норматив: 28</span>
+            </div>
+          </div>
+
+          {/* Camera Canvas View */}
+          <div className="relative aspect-video max-w-2xl mx-auto rounded-3xl overflow-hidden border-2 border-amber-500/50 bg-neutral-950 shadow-2xl">
+            <video ref={videoRef} className="w-full h-full object-cover hidden" playsInline />
+            <canvas ref={canvasRef} className="w-full h-full object-cover" />
+
+            {/* Pre-battle Countdown Overlay */}
+            {gameState === 'countdown' && (
+              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center">
+                <div className="text-center space-y-2">
+                  <div className="text-7xl font-black text-amber-400 font-mono animate-bounce">
+                    {preCountdown}
+                  </div>
+                  <span className="text-xs font-bold text-neutral-300 uppercase tracking-widest">
+                    ГОТУЙТЕСЯ ДО ПЕРШОГО ПОВТОРЕННЯ
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Reject cause notification */}
+            {myRejectCause && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-rose-500/90 text-neutral-950 font-extrabold text-xs shadow-lg animate-pulse">
+                ⚠️ {myRejectCause}
               </div>
             )}
           </div>
+        </div>
+      )}
 
-          {/* Action Loop: Passport -> Share -> New Battle */}
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
-            <button
-              onClick={onBackToPassport}
-              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-amber-500 text-neutral-950 font-black text-sm tracking-wide shadow-lg shadow-amber-950/40 hover:bg-amber-400 transition-all"
-            >
-              <Shield className="w-4 h-4" />
-              <span>Зарахувати у Forge Passport & Рівень</span>
-            </button>
+      {/* ========================================================================= */}
+      {/* 6. SETTLEMENT & RESULT STATE */}
+      {/* ========================================================================= */}
+      {gameState === 'settlement' && (
+        <div className="max-w-md mx-auto text-center space-y-6 py-8">
+          <div className="p-8 rounded-3xl border-2 border-amber-500 bg-neutral-900/90 space-y-6 shadow-2xl">
+            <div className="w-16 h-16 rounded-3xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center mx-auto text-3xl">
+              🏆
+            </div>
+
+            <div className="space-y-1">
+              <h2 className="text-3xl font-black text-neutral-100 font-epic uppercase">
+                {myValidReps > rivalValidReps ? 'ПЕРЕМОГА!' : myValidReps === rivalValidReps ? 'НІЧИЯ!' : 'ПОРАЗКА'}
+              </h2>
+              <p className="text-xs text-neutral-400">
+                Раунд верифіковано компʼютерним аналізом. Результати занесено до Forge Passport.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 p-4 rounded-2xl bg-neutral-950 border border-neutral-800 text-xs">
+              <div>
+                <span className="text-neutral-500 block">Ваш результат</span>
+                <span className="text-xl font-bold text-amber-300 font-mono">{myValidReps} репів</span>
+              </div>
+              <div>
+                <span className="text-neutral-500 block">Суперник</span>
+                <span className="text-xl font-bold text-neutral-300 font-mono">{rivalValidReps} репів</span>
+              </div>
+            </div>
+
+            {settlementResult && (
+              <div className="p-3.5 rounded-2xl bg-neutral-950 border border-neutral-800 text-left text-[11px] space-y-2 font-mono">
+                {settlementResult.solanaTxSignature ? (
+                  <>
+                    <div className="text-emerald-400 font-semibold flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Solana On-Chain Proof Recorded
+                    </div>
+                    <div className="text-neutral-400 truncate">Hash: {settlementResult.proofHash || '—'}</div>
+                    {settlementResult.solanaExplorerUrl && (
+                      <a
+                        href={settlementResult.solanaExplorerUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 text-amber-400 hover:text-amber-300 font-semibold"
+                      >
+                        Переглянути транзакцію в Solana Explorer <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                    <div className="text-neutral-500 truncate">Tx: {settlementResult.solanaTxSignature}</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-amber-400 font-semibold flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      Solana Proof не записано
+                    </div>
+                    <div className="text-neutral-500">Результат Battle збережено, але реальна on-chain транзакція не була підтверджена.</div>
+                  </>
+                )}
+              </div>
+            )}
 
             <button
-              onClick={copyShareLink}
-              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-neutral-800 hover:bg-neutral-750 text-white border border-neutral-700 font-semibold text-sm transition-all"
+              onClick={() => {
+                setGameState('lobby');
+                sound.playClick();
+              }}
+              className="w-full py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-extrabold cursor-pointer"
             >
-              <Share2 className="w-4 h-4 text-amber-400" />
-              <span>{isCopiedLink ? 'Лінк скопійовано!' : 'Кинути виклик другу (Share)'}</span>
-            </button>
-
-            <button
-              onClick={() => { setGameState('lobby'); sound.playClick(); }}
-              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-neutral-950 hover:bg-neutral-900 text-neutral-300 border border-neutral-800 font-semibold text-sm transition-all"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span>Новий Батл</span>
+              Нова дуель
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Disconnected State */}
+      {gameState === 'disconnected' && (
+        <div className="max-w-md mx-auto text-center space-y-6 py-12">
+          <div className="w-14 h-14 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto text-2xl border border-rose-500/40">
+            <XCircle className="w-8 h-8" />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-xl font-bold text-neutral-100">Суперник відключився</h3>
+            <p className="text-xs text-neutral-400">
+              Звʼязок з другим гравцем було втрачено під час вибору вправи. Спробуйте новий матчмейкінг.
+            </p>
+          </div>
+          <button
+            onClick={() => setGameState('lobby')}
+            className="px-6 py-2.5 rounded-xl bg-amber-500 text-neutral-950 text-xs font-bold cursor-pointer"
+          >
+            Повернутися у лобі
+          </button>
         </div>
       )}
     </div>

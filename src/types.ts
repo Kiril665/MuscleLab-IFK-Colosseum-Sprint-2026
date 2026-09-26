@@ -679,11 +679,16 @@ export type OnlineStatus = 'show' | 'hide';
 
 export type ThemePreference = 'light' | 'dark' | 'system';
 
+export type SupportedLanguage = 'en' | 'uk' | 'pl' | 'de' | 'es' | 'fr';
+
 export interface AccountPrivacySettings {
   profileVisibility: PrivacyVisibility;
   activityVisibility: PrivacyVisibility;
   onlineStatus: OnlineStatus;
   messagePermission: MessagePermission;
+  showStats?: boolean;
+  showBattleStats?: boolean;
+  showAchievements?: boolean;
 }
 
 export interface NotificationSettings {
@@ -693,6 +698,8 @@ export interface NotificationSettings {
   guild: boolean;
   achievements: boolean;
   challenges: boolean;
+  workoutReminders?: boolean;
+  systemUpdates?: boolean;
 }
 
 export interface UserSessionInfo {
@@ -730,11 +737,74 @@ export interface ForgeUser {
   privacy: AccountPrivacySettings;
   notifications: NotificationSettings;
   theme: ThemePreference;
+  language?: SupportedLanguage;
   hasCompletedOnboarding: boolean;
+  walletAddress?: string | null;
   // Relationships & Stats
   guildId?: string;
   guildName?: string;
   purchasedProductIds?: string[];
+}
+
+export type SubscriptionStatus = 'free' | 'pending' | 'active' | 'past_due' | 'cancelled' | 'expired' | 'refunded';
+
+export interface RegionalPrice {
+  currency: string;
+  symbol: string;
+  monthlyAmount: number;
+  yearlyAmount: number;
+  monthlyFormatted: string;
+  yearlyFormatted: string;
+}
+
+export interface PremiumPlanInfo {
+  id: 'premium_monthly' | 'premium_yearly';
+  interval: 'month' | 'year';
+  title: string;
+  subtitle: string;
+  features: string[];
+  price: RegionalPrice;
+  isPopular?: boolean;
+  saveBadge?: string;
+}
+
+export interface UserSubscriptionDetails {
+  status: SubscriptionStatus;
+  isPremium: boolean;
+  planId?: string;
+  interval?: 'month' | 'year';
+  amount?: number;
+  currency?: string;
+  currentPeriodStart?: string;
+  currentPeriodEnd?: string;
+  cancelAtPeriodEnd?: boolean;
+  paymentMethod?: 'card' | 'bank_transfer' | 'apple_pay' | 'google_pay';
+}
+
+export interface PaymentHistoryItem {
+  id: string;
+  date: string;
+  productName: string;
+  amount: number;
+  currency: string;
+  paymentMethod: 'card' | 'bank_transfer' | 'apple_pay' | 'google_pay';
+  status: 'paid' | 'pending' | 'failed' | 'refunded';
+  transactionId: string;
+  receiptUrl?: string;
+}
+
+export interface BankTransferDetails {
+  id: string;
+  referenceCode: string;
+  amount: number;
+  currency: string;
+  recipientName: string;
+  recipientIban: string;
+  recipientEdrpou: string;
+  bankName: string;
+  purpose: string;
+  status: 'pending' | 'confirmed' | 'rejected' | 'refunded';
+  createdAt: string;
 }
 
 export interface OnboardingData {
@@ -853,7 +923,7 @@ export interface VerifiedAchievement {
 }
 
 export interface ForgePassportData {
-  walletAddress: string | null;
+  walletAddress: string;
   battlesCount: number;
   winsCount: number;
   lossesCount: number;
@@ -865,7 +935,7 @@ export interface ForgePassportData {
   };
   forgeTier: ForgeProgressionTier;
   achievements: VerifiedAchievement[];
-  lastActiveNonce: string | null;
+  lastActiveNonce: string;
   reputationBadge: string;
 }
 

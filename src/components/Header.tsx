@@ -29,6 +29,8 @@ import {
 import { sound } from '../services/soundEngine';
 import { authStore } from '../services/authStore';
 import { Discipline, AnvilStage, ForgeUser } from '../types';
+import { i18n } from '../services/i18n';
+import { themeService } from '../services/theme';
 
 interface HeaderProps {
   activeTab: string;
@@ -60,13 +62,20 @@ export const Header: React.FC<HeaderProps> = ({
   const [isAmbientOn, setIsAmbientOn] = useState(sound.getIsAmbientPlaying());
   const [showBranchModal, setShowBranchModal] = useState(false);
   const [showAllModulesMenu, setShowAllModulesMenu] = useState(false);
+  const [, setLangTick] = useState(0);
 
   useEffect(() => {
     const unsubAuth = authStore.subscribe(() => {
       setCurrentUser(authStore.getCurrentUser());
       setSyncStatus(authStore.getSyncStatus());
     });
-    return () => unsubAuth();
+    const unsubI18n = i18n.subscribe(() => {
+      setLangTick(t => t + 1);
+    });
+    return () => {
+      unsubAuth();
+      unsubI18n();
+    };
   }, []);
 
   // Global Ctrl+K / Cmd+K search hotkey
@@ -382,6 +391,119 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Authenticated User Menu Dropdown (#70, #81) */}
+            {currentUser ? (
+              <div className="relative">
+                <button
+                  id="header-user-menu-btn"
+                  onClick={() => {
+                    sound.playClick();
+                    setShowUserMenu(!showUserMenu);
+                  }}
+                  className="flex items-center gap-2 p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl border border-neutral-800 hover:border-amber-500/50 bg-neutral-900/90 hover:bg-neutral-850 transition-all cursor-pointer"
+                >
+                  <div className="w-7 h-7 rounded-lg overflow-hidden border border-amber-500/50 shrink-0">
+                    <img
+                      src={currentUser.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces'}
+                      alt={currentUser.displayName || currentUser.username}
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                  <span className="hidden xl:inline text-xs font-bold text-neutral-200 max-w-[100px] truncate">
+                    {currentUser.displayName || currentUser.username}
+                  </span>
+                  <ChevronDown className="w-3.5 h-3.5 text-neutral-400" />
+                </button>
+
+                {showUserMenu && (
+                  <div
+                    onMouseLeave={() => setShowUserMenu(false)}
+                    className="absolute right-0 top-full mt-2 w-64 p-2 rounded-2xl bg-neutral-900 border border-amber-500/40 shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 space-y-1"
+                  >
+                    {/* User Summary Header */}
+                    <div className="p-3 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-lg overflow-hidden border border-amber-500 shrink-0">
+                          <img
+                            src={currentUser.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces'}
+                            alt={currentUser.displayName || currentUser.username}
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        </div>
+                        <div className="truncate">
+                          <div className="text-xs font-bold text-white truncate">{currentUser.displayName}</div>
+                          <div className="text-[11px] text-amber-400 font-mono font-bold truncate">{currentUser.username}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between pt-1 border-t border-neutral-850 text-[10px] text-neutral-400">
+                        <span>Рівень {currentUser.level}</span>
+                        <span className="text-amber-300 font-bold">{currentUser.xp} XP</span>
+                      </div>
+                    </div>
+
+                    {/* Navigation Actions */}
+                    <button
+                      onClick={() => {
+                        setShowUserMenu(false);
+                        handleTabClick('profile_quests');
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-neutral-800 flex items-center gap-2.5 transition-colors cursor-pointer"
+                    >
+                      <UserIcon className="w-4 h-4 text-amber-400" />
+                      <span>{i18n.t('nav.profile')} & {i18n.t('settings.notifications.achievements')}</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setShowUserMenu(false);
+                        handleTabClick('settings');
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-neutral-800 flex items-center gap-2.5 transition-colors cursor-pointer"
+                    >
+                      <SettingsIcon className="w-4 h-4 text-amber-400" />
+                      <span>{i18n.t('nav.settings')}</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setShowUserMenu(false);
+                        handleTabClick('passport');
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-neutral-800 flex items-center gap-2.5 transition-colors cursor-pointer"
+                    >
+                      <ShieldCheck className="w-4 h-4 text-cyan-400" />
+                      <span>{i18n.t('nav.passport')}</span>
+                    </button>
+
+                    <div className="pt-1 border-t border-neutral-800">
+                      <button
+                        onClick={() => {
+                          setShowUserMenu(false);
+                          authStore.logout();
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-950/40 flex items-center gap-2.5 transition-colors cursor-pointer"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        <span>{i18n.t('nav.logout')}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  sound.playClick();
+                  if (onOpenAuth) onOpenAuth();
+                }}
+                className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs uppercase tracking-wider transition-all shadow-md cursor-pointer"
+              >
+                Увійти
+              </button>
+            )}
           </div>
         </div>
 

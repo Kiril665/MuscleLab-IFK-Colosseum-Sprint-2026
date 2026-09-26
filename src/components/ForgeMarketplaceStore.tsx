@@ -101,8 +101,9 @@ export const ForgeMarketplaceStore: React.FC<ForgeMarketplaceStoreProps> = ({ in
     marketplaceStore.equipCosmetic(id);
   };
 
-  const handleTogglePremium = () => {
-    marketplaceStore.togglePremium();
+  const handleTogglePremium = async () => {
+    sound.playClick();
+    setActiveTab('premium');
   };
 
   const handlePublishSubmit = (e: React.FormEvent) => {

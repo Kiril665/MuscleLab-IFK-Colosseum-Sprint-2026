@@ -275,6 +275,26 @@ class AuthStore {
     return true;
   }
 
+  // Change email for currently authenticated user
+  public async changeEmail(newEmail: string, currentPassword: string): Promise<ForgeUser> {
+    const res = await fetch('/api/user/email', {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({ newEmail, currentPassword })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Помилка зміни електронної пошти.');
+    }
+
+    const data = await res.json();
+    this.currentUser = data.user;
+    localStorage.setItem('forgemuscle_user_cache', JSON.stringify(data.user));
+    this.notify();
+    return data.user;
+  }
+
   // Local Register
   public async register(email: string, username: string, password: string, displayName?: string): Promise<{ isNewUser: boolean; user: ForgeUser }> {
     this.isLoading = true;

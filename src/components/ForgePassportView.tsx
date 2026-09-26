@@ -6,7 +6,6 @@ import {
 } from '../types';
 import { forgeGameStore, FORGE_TIER_CONFIG } from '../services/forgeGameStore';
 import { sound } from '../services/soundEngine';
-import { connectSolanaWallet, disconnectSolanaWallet } from '../services/solanaWallet';
 import confetti from 'canvas-confetti';
 import { 
   Shield, 
@@ -38,8 +37,6 @@ export const ForgePassportView: React.FC<ForgePassportViewProps> = ({
   const [passport, setPassport] = useState<ForgePassportData>(forgeGameStore.getPassport());
   const [copiedWallet, setCopiedWallet] = useState(false);
   const [selectedAchievement, setSelectedAchievement] = useState<VerifiedAchievement | null>(null);
-  const [walletBusy, setWalletBusy] = useState(false);
-  const [walletError, setWalletError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsub = forgeGameStore.subscribe(() => {
@@ -49,38 +46,10 @@ export const ForgePassportView: React.FC<ForgePassportViewProps> = ({
   }, []);
 
   const copyWallet = () => {
-    if (!passport.walletAddress) return;
     navigator.clipboard.writeText(passport.walletAddress);
     setCopiedWallet(true);
     sound.playClick();
     setTimeout(() => setCopiedWallet(false), 2000);
-  };
-
-  const handleConnectWallet = async () => {
-    setWalletBusy(true);
-    setWalletError(null);
-    try {
-      const address = await connectSolanaWallet();
-      forgeGameStore.setWalletAddress(address);
-      sound.playLevelUp();
-    } catch (error: any) {
-      setWalletError(error?.message || 'Не вдалося підключити Solana wallet.');
-    } finally {
-      setWalletBusy(false);
-    }
-  };
-
-  const handleDisconnectWallet = async () => {
-    setWalletBusy(true);
-    setWalletError(null);
-    try {
-      await disconnectSolanaWallet();
-      forgeGameStore.setWalletAddress('');
-    } catch (error: any) {
-      setWalletError(error?.message || 'Не вдалося відключити wallet.');
-    } finally {
-      setWalletBusy(false);
-    }
   };
 
   const currentTierInfo = FORGE_TIER_CONFIG[passport.forgeTier] || FORGE_TIER_CONFIG.raw_metal;
@@ -168,20 +137,6 @@ export const ForgePassportView: React.FC<ForgePassportViewProps> = ({
               )}
             </div>
 
-            <div className="flex gap-2">
-              <button
-                onClick={passport.walletAddress ? handleDisconnectWallet : handleConnectWallet}
-                disabled={walletBusy}
-                className="flex-1 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
-              >
-                {walletBusy ? 'Підключення…' : passport.walletAddress ? 'Відключити' : 'Підключити Solana Wallet'}
-              </button>
-            </div>
-            {walletError && (
-              <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
-                {walletError}
-              </div>
-            )}
             <div className="text-[11px] text-neutral-500 flex items-center justify-between">
               <span>Attestation Engine:</span>
               <span className="font-mono text-neutral-400">ForgeVerifierAuthority</span>

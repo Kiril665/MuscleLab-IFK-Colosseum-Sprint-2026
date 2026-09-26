@@ -25,6 +25,7 @@ import { HelpCenterView } from './components/HelpCenterView';
 import { Leaderboard } from './components/Leaderboard';
 import { ForgeWardrobe } from './components/ForgeWardrobe';
 import { ChallengeInviteLanding } from './components/ChallengeInviteLanding';
+import { AccountSettings } from './components/AccountSettings';
 import { HelpArticle } from './data/helpArticles';
 import { Discipline, AnvilStage, WorkoutSession, ForgedProgram, Exercise } from './types';
 import { EXERCISES } from './data/exercisesData';
@@ -367,6 +368,13 @@ export default function App() {
 
         {activeTab === 'prohub' && (
           <ProHub />
+        )}
+
+        {(activeTab === 'settings' || activeTab === 'account_settings') && (
+          <AccountSettings
+            onNavigateHome={() => setActiveTab('battle')}
+            onNavigateToProfile={() => setActiveTab('profile_quests')}
+          />
         )}
 
         {activeTab === 'help' && (

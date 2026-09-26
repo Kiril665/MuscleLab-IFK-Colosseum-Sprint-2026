@@ -1120,30 +1120,38 @@ export interface ExerciseCategoryMeta {
 
 export const EXERCISE_CATEGORIES_META: ExerciseCategoryMeta[] = [
   { id: 'all', nameUk: 'Усі вправи', description: 'Повна база рухів ForgeMuscle', iconName: 'Sparkles' },
-  { id: 'upper_body', nameUk: 'Верхня частина тіла', description: 'Віджимання, бруси, жими, плечі', iconName: 'Shield' },
-  { id: 'lower_body', nameUk: 'Ноги', description: 'Присідання, випади, литки', iconName: 'Compass' },
-  { id: 'core', nameUk: 'Корпус', description: 'Планка, скручування на прес', iconName: 'Flame' },
-  { id: 'cardio', nameUk: 'Кардіо', description: 'Jumping Jacks, підйом колін, берпі', iconName: 'Activity' }
+  { id: 'chest', nameUk: 'Груди (Chest)', description: 'Віджимання, бруси, жими', iconName: 'Shield' },
+  { id: 'back', nameUk: 'Спина (Back)', description: 'Підтягування, тяги', iconName: 'Layers' },
+  { id: 'legs', nameUk: 'Ноги (Legs)', description: 'Присідання, випади, литки', iconName: 'Compass' },
+  { id: 'shoulders', nameUk: 'Плечі (Shoulders)', description: 'Жим, віджимання у стійці, пайк', iconName: 'Crosshair' },
+  { id: 'arms', nameUk: 'Руки (Arms)', description: 'Біцепс, трицепс, діамантові віджимання', iconName: 'Zap' },
+  { id: 'core', nameUk: 'Кор / Прес (Core)', description: 'Планка, скручування, підйоми ніг', iconName: 'Flame' },
+  { id: 'cardio', nameUk: 'Full Body / Кардіо', description: 'Jumping Jacks, підйом колін, берпі', iconName: 'Activity' }
 ];
 
 export function getExerciseCategory(ex: Exercise): string {
-  if (ex.category) {
-    if (ex.category === 'general_conditioning') return 'cardio';
-    return ex.category;
-  }
-  if (['chest', 'back', 'shoulders', 'biceps', 'triceps'].includes(ex.muscle)) return 'upper_body';
-  if (['legs'].includes(ex.muscle)) return 'lower_body';
-  if (['abs'].includes(ex.muscle)) return 'core';
+  if (ex.muscle === 'chest') return 'chest';
+  if (ex.muscle === 'back') return 'back';
+  if (ex.muscle === 'legs') return 'legs';
+  if (ex.muscle === 'shoulders') return 'shoulders';
+  if (ex.muscle === 'biceps' || ex.muscle === 'triceps') return 'arms';
+  if (ex.muscle === 'abs') return 'core';
+  if (ex.category === 'cardio' || ex.category === 'general_conditioning') return 'cardio';
   return 'cardio';
 }
 
 export function getExerciseCategoryTitle(catId: string): string {
   switch (catId) {
+    case 'chest': return 'Груди';
+    case 'back': return 'Спина';
+    case 'legs': return 'Ноги';
+    case 'shoulders': return 'Плечі';
+    case 'arms': return 'Руки';
+    case 'core': return 'Корпус / Прес';
+    case 'cardio':
+    case 'general_conditioning': return 'Full Body / Кардіо';
     case 'upper_body': return 'Верхня частина тіла';
     case 'lower_body': return 'Ноги';
-    case 'core': return 'Корпус';
-    case 'cardio':
-    case 'general_conditioning': return 'Кардіо';
     default: return 'Усі вправи';
   }
 }
