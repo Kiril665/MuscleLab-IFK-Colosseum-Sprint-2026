@@ -68,16 +68,6 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const handleLoginAsAdmin = async () => {
-    sound.playClick();
-    try {
-      await authStore.signInWithGoogle({ email: 'vrbkirill09@gmail.com', name: 'Kirill (Admin)' });
-      await loadAdminData();
-    } catch {
-      // ignore
-    }
-  };
-
   const handleUpdateRole = async (userId: string, newRole: UserRole) => {
     sound.playClick();
     try {

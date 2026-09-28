@@ -121,18 +121,19 @@ class AuthStore {
     return this.currentUser;
   }
 
-  // Google OAuth / Continue with Google (#62, #81, #87)
-  public async signInWithGoogle(customDetails?: { email?: string; name?: string; picture?: string }): Promise<{ isNewUser: boolean; user: ForgeUser }> {
+  // Google OAuth / Continue with Google
+  public async signInWithGoogle(customDetails?: { email?: string; name?: string; picture?: string; credential?: string; googleId?: string }): Promise<{ isNewUser: boolean; user: ForgeUser }> {
+    if (!customDetails || !customDetails.credential) {
+      throw new Error("Google OAuth облікові дані (ID Token) відсутні. Будь ласка, скористайтеся формою реєстрації або входу через Email та пароль.");
+    }
+
     this.isLoading = true;
     this.notify();
 
     try {
-      // Default to realistic athlete profile or provided details
       const payload = {
-        email: customDetails?.email || 'vrbkirill09@gmail.com',
-        name: customDetails?.name || 'Kirill Vrb',
-        picture: customDetails?.picture || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces',
-        googleId: `google_${Date.now()}`
+        credential: customDetails.credential,
+        id_token: customDetails.credential
       };
 
       const res = await fetch('/api/auth/google', {
@@ -143,7 +144,7 @@ class AuthStore {
 
       if (!res.ok) {
         const errData = await res.json();
-        throw new Error(errData.error || "We couldn't sign you in. Please try again.");
+        throw new Error(errData.error || "Не вдалося виконати вхід через Google. Будь ласка, спробуйте ще раз.");
       }
 
       const data = await res.json();
@@ -296,7 +297,7 @@ class AuthStore {
   }
 
   // Local Register
-  public async register(email: string, username: string, password: string, displayName?: string): Promise<{ isNewUser: boolean; user: ForgeUser }> {
+  public async register(email: string, username: string, password: string, displayName?: string, confirmPassword?: string): Promise<{ isNewUser: boolean; user: ForgeUser }> {
     this.isLoading = true;
     this.notify();
 
@@ -304,7 +305,7 @@ class AuthStore {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, username, password, displayName })
+        body: JSON.stringify({ email, username, password, displayName, confirmPassword })
       });
 
       if (!res.ok) {

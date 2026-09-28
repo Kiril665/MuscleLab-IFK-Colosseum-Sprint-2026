@@ -2,31 +2,65 @@ import { Exercise } from '../types';
 import { EXERCISES } from '../data/exercisesData';
 import { authStore } from './authStore';
 import { sound } from './soundEngine';
+import { TelemetryFrame } from './pose/serverWorkoutVerifier';
 
 export type BattleState = 
   | 'IDLE'
   | 'MATCHMAKING' 
   | 'MATCH_FOUND' 
   | 'EXERCISE_SELECTION' 
+  | 'WAITING_FOR_OPPONENT'
   | 'EXERCISE_CONFIRMED' 
   | 'CALIBRATION' 
   | 'COUNTDOWN' 
   | 'ACTIVE' 
+  | 'VERIFYING'
   | 'FINISHED'
-  | 'OPPONENT_DISCONNECTED';
+  | 'SETTLED'
+  | 'OPPONENT_DISCONNECTED'
+  | 'CAMERA_ERROR'
+  | 'VERIFICATION_FAILED';
 
 export interface BattleParticipant {
   id: string;
   name: string;
   avatar: string;
   wallet?: string;
+  badge?: string;
   isPremium: boolean;
+  isAi?: boolean;
   selectedExerciseId: string | null;
   isReady: boolean;
+  calibrationPassed: boolean;
   isConnected: boolean;
   validReps: number;
   rejectedReps: number;
   romPercent: number;
+}
+
+export interface VerifiedBattleResult {
+  battleId: string;
+  winnerId: string | 'draw';
+  winnerReps: number;
+  p1VerifiedReps: number;
+  p2VerifiedReps: number;
+  p1Id: string;
+  p2Id: string;
+  exerciseId: string;
+  proofHash: string;
+  serverSignature: string;
+  xpAwarded: number;
+  finishedAt: string;
+  verificationStatus: string;
+}
+
+export interface SolanaSettlementResult {
+  status: 'CONFIRMED' | 'PENDING' | 'FAILED' | 'NOT_CONFIGURED';
+  signature: string | null;
+  explorerUrl: string | null;
+  memoContent?: string;
+  error?: string;
+  settledAt?: string;
 }
 
 export interface BattleRoomState {
@@ -34,12 +68,15 @@ export interface BattleRoomState {
   roomCode: string;
   state: BattleState;
   myRole: 'player1' | 'player2';
+  isAiBattle: boolean;
   player1: BattleParticipant;
   player2: BattleParticipant;
   authoritativeExerciseId: string | null;
   selectionTimeLeft: number;
   battleTimeLeft: number;
-  winnerId: string | 'draw' | null;
+  sessionNonce: string | null;
+  verifiedResult: VerifiedBattleResult | null;
+  solanaSettlement: SolanaSettlementResult | null;
   errorMessage: string | null;
 }
 
@@ -50,14 +87,18 @@ class BattleStore {
   private roomCode: string = 'FORGE-GLOBAL';
   private state: BattleState = 'IDLE';
   private myRole: 'player1' | 'player2' = 'player1';
+  private isAiBattle: boolean = false;
+  private sessionNonce: string | null = null;
 
   private player1: BattleParticipant = {
     id: 'p1_me',
     name: 'Ви (Атлет Forge)',
     avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop',
+    badge: 'Challenger',
     isPremium: false,
-    selectedExerciseId: null,
+    selectedExerciseId: 'pushups_classic',
     isReady: false,
+    calibrationPassed: false,
     isConnected: true,
     validReps: 0,
     rejectedReps: 0,
@@ -65,41 +106,51 @@ class BattleStore {
   };
 
   private player2: BattleParticipant = {
-    id: 'p2_rival',
-    name: 'Норматив Кузні',
-    avatar: 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=160&h=160&fit=crop',
+    id: 'p2_waiting',
+    name: 'Очікування суперника…',
+    avatar: '',
+    badge: 'PvP',
     isPremium: false,
+    isAi: false,
     selectedExerciseId: null,
     isReady: false,
-    isConnected: true,
+    calibrationPassed: false,
+    isConnected: false,
     validReps: 0,
     rejectedReps: 0,
     romPercent: 0
   };
 
-  private authoritativeExerciseId: string | null = null;
-  private selectionTimeLeft: number = 30;
+  private authoritativeExerciseId: string | null = 'pushups_classic';
+  private selectionTimeLeft: number = 35;
   private battleTimeLeft: number = 60;
-  private winnerId: string | 'draw' | null = null;
+  private verifiedResult: VerifiedBattleResult | null = null;
+  private solanaSettlement: SolanaSettlementResult | null = null;
   private errorMessage: string | null = null;
 
+  // Real telemetry journal recorded hands-free via pose tracker
+  private telemetryFrames: TelemetryFrame[] = [];
+
   private listeners: Set<BattleListener> = new Set();
-  private socket: WebSocket | null = null;
   private pollTimer: any = null;
-  private selectionTimerInterval: any = null;
+  private battleClockInterval: any = null;
 
   constructor() {
-    // Sync current user info
+    this.syncCurrentUser();
     authStore.subscribe(() => {
-      const u = authStore.getCurrentUser();
-      if (u) {
-        this.player1.id = u.id;
-        this.player1.name = u.displayName || u.username;
-        this.player1.avatar = u.avatar || this.player1.avatar;
-        this.player1.isPremium = Boolean(u.isPremium);
-        this.player1.wallet = u.walletAddress || undefined;
-      }
+      this.syncCurrentUser();
     });
+  }
+
+  private syncCurrentUser() {
+    const u = authStore.getCurrentUser();
+    if (u) {
+      this.player1.id = u.id;
+      this.player1.name = u.displayName || u.username;
+      this.player1.avatar = u.avatar || this.player1.avatar;
+      this.player1.isPremium = Boolean(u.isPremium);
+      this.player1.wallet = u.walletAddress || undefined;
+    }
   }
 
   public subscribe(listener: BattleListener) {
@@ -117,44 +168,53 @@ class BattleStore {
 
   public getState(): BattleRoomState {
     return {
-      roomId: this.roomId || 'local_room',
+      roomId: this.roomId || '',
       roomCode: this.roomCode,
       state: this.state,
       myRole: this.myRole,
+      isAiBattle: this.isAiBattle,
       player1: { ...this.player1 },
       player2: { ...this.player2 },
       authoritativeExerciseId: this.authoritativeExerciseId,
       selectionTimeLeft: this.selectionTimeLeft,
       battleTimeLeft: this.battleTimeLeft,
-      winnerId: this.winnerId,
+      sessionNonce: this.sessionNonce,
+      verifiedResult: this.verifiedResult ? { ...this.verifiedResult } : null,
+      solanaSettlement: this.solanaSettlement ? { ...this.solanaSettlement } : null,
       errorMessage: this.errorMessage
     };
   }
 
   public getAvailableExercises(): Exercise[] {
-    // Filter exercises that are camera-verifiable
     return EXERCISES.filter((ex) => {
       const isCameraSupported = 
         Boolean(ex.cameraVerifierId) || 
         Boolean(ex.cameraTrackingSupported) || 
-        ['push_up', 'squat', 'pull_up', 'dips_bars', 'plank'].some(k => ex.id.includes(k) || (ex.category && ex.category.includes(k)));
+        ['push_up', 'squat', 'pull_up', 'dips_bars', 'pike_pushups', 'archer_pushups'].some(k => ex.id.includes(k) || (ex.category && ex.category.includes(k)));
       return isCameraSupported;
     });
   }
 
   /**
-   * Start matchmaking for a battle room
+   * Start server-authoritative matchmaking
    */
-  public async startMatchmaking(preferredRoomCode = 'FORGE-GLOBAL'): Promise<void> {
+  public async startMatchmaking(preferredRoomCode = 'FORGE-GLOBAL', mode: 'pvp' | 'ai' = 'pvp'): Promise<void> {
     this.resetState();
     this.state = 'MATCHMAKING';
     this.roomCode = preferredRoomCode.toUpperCase();
     this.errorMessage = null;
+    this.isAiBattle = (mode === 'ai');
     this.notify();
 
     const currentUser = authStore.getCurrentUser();
     const athleteName = currentUser ? (currentUser.displayName || currentUser.username) : 'Атлет Forge';
-    const athleteWallet = currentUser?.walletAddress || 'FORGE-LOCAL-USER';
+    if (!currentUser) {
+      this.errorMessage = 'Для PvP потрібна авторизація.';
+      this.state = 'IDLE';
+      this.notify();
+      return;
+    }
+    const athleteWallet = currentUser.walletAddress || currentUser.id;
 
     try {
       const res = await fetch('/api/battle/matchmake', {
@@ -162,8 +222,8 @@ class BattleStore {
         headers: authStore.getAuthHeaders(),
         body: JSON.stringify({
           roomCode: this.roomCode,
-          athleteName,
-          athleteWallet
+          exercise: this.player1.selectedExerciseId || 'pushups_classic',
+          mode
         })
       });
 
@@ -175,380 +235,516 @@ class BattleStore {
         return;
       }
 
-      this.roomId = data.battleId || `room_${Date.now()}`;
-
-      if (data.status === 'matched') {
-        // Matched with another real user
-        this.player2 = {
-          id: data.opponent.id || 'p2_matched',
-          name: data.opponent.name || 'Суперник',
-          avatar: data.opponent.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop',
-          wallet: data.opponent.wallet,
-          isPremium: false,
-          selectedExerciseId: null,
-          isReady: false,
-          isConnected: true,
-          validReps: 0,
-          rejectedReps: 0,
-          romPercent: 0
-        };
-        this.enterExerciseSelection();
-      } else {
-        // Waiting for matchmaking response / status poll
-        this.startMatchmakingPolling();
-      }
-    } catch (err: any) {
-      // Fallback local match for offline mode
-      this.roomId = `room_local_${Date.now()}`;
-      this.enterExerciseSelection();
-    }
-  }
-
-  private startMatchmakingPolling() {
-    let attempts = 0;
-    if (this.pollTimer) clearInterval(this.pollTimer);
-
-    this.pollTimer = setInterval(async () => {
-      attempts++;
-      if (attempts > 12) {
-        // Matchmaking timeout: paired with Official Target Benchmark Athlete
-        clearInterval(this.pollTimer);
-        this.player2 = {
-          id: 'p2_benchmark',
-          name: 'Норматив Кузні (Target Benchmark)',
-          avatar: 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=160&h=160&fit=crop',
-          wallet: 'FORGE-BENCHMARK-OFFICIAL',
-          isPremium: true,
-          selectedExerciseId: 'pushups_classic',
-          isReady: false,
-          isConnected: true,
-          validReps: 0,
-          rejectedReps: 0,
-          romPercent: 0
-        };
-        this.enterExerciseSelection();
+      if (data.status === 'waiting') {
+        this.state = 'MATCHMAKING';
+        this.errorMessage = null;
+        this.notify();
         return;
       }
 
-      try {
-        const res = await fetch(`/api/battle/matchmake/status?roomCode=${encodeURIComponent(this.roomCode)}&exercise=pushups`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.status === 'matched') {
-            clearInterval(this.pollTimer);
-            if (data.opponent) {
-              this.player2 = {
-                id: data.opponent.id || 'p2_matched',
-                name: data.opponent.name || 'Суперник',
-                avatar: data.opponent.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop',
-                wallet: data.opponent.wallet,
-                isPremium: false,
-                selectedExerciseId: null,
-                isReady: false,
-                isConnected: true,
-                validReps: 0,
-                rejectedReps: 0,
-                romPercent: 0
-              };
-            }
-            this.enterExerciseSelection();
-          }
-        }
-      } catch {
-        // ignore
+      this.roomId = data.battleId;
+      this.sessionNonce = data.sessionNonce;
+      this.isAiBattle = Boolean(data.isAiBattle);
+
+      if (data.opponent) {
+        this.player2 = {
+          id: data.opponent.userId || data.opponent.wallet || (this.isAiBattle ? 'ai_forge_simulator' : 'p2_waiting'),
+          name: data.opponent.name || (this.isAiBattle ? 'Forge AI Trainer' : 'Суперник'),
+          avatar: data.opponent.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop',
+          wallet: data.opponent.wallet,
+          badge: data.opponent.badge || (this.isAiBattle ? 'AI Coach' : 'Fighter P2'),
+          isPremium: Boolean(data.opponent.isPremium),
+          isAi: Boolean(data.opponent.isAi),
+          selectedExerciseId: 'pushups_classic',
+          isReady: false,
+          calibrationPassed: false,
+          isConnected: true,
+          validReps: 0,
+          rejectedReps: 0,
+          romPercent: 0
+        };
       }
-    }, 1500);
+
+      this.state = 'EXERCISE_SELECTION';
+      this.selectionTimeLeft = 35;
+      sound.playGong();
+      this.startRoomPolling();
+      this.notify();
+    } catch (err: any) {
+      this.errorMessage = err?.message || 'Помилка звʼязку із сервером';
+      this.state = 'IDLE';
+      this.notify();
+    }
   }
 
   /**
-   * Transitions to Exercise Selection Screen
+   * Continuous sync with server authoritative room state
    */
-  private enterExerciseSelection() {
+  private startRoomPolling() {
     if (this.pollTimer) clearInterval(this.pollTimer);
-    this.state = 'EXERCISE_SELECTION';
-    this.selectionTimeLeft = 30;
-    this.myRole = 'player1';
-    this.authoritativeExerciseId = null;
 
-    sound.playGong();
-    this.startSelectionTimer();
-    this.notify();
+    this.pollTimer = setInterval(async () => {
+      if (!this.roomId) return;
+      const currentUser = authStore.getCurrentUser();
+      const userId = currentUser?.id || this.player1.id;
 
-    // Also register room on server for authoritative verification
-    this.syncRoomWithServer();
-  }
+      try {
+        const res = await fetch(`/api/battle/room/${encodeURIComponent(this.roomId)}?userId=${encodeURIComponent(userId)}`, {
+          headers: authStore.getAuthHeaders()
+        });
 
-  private startSelectionTimer() {
-    if (this.selectionTimerInterval) clearInterval(this.selectionTimerInterval);
+        if (res.ok) {
+          const room = await res.json();
+          this.selectionTimeLeft = room.secondsLeft ?? this.selectionTimeLeft;
 
-    this.selectionTimerInterval = setInterval(() => {
-      if (this.selectionTimeLeft > 0) {
-        this.selectionTimeLeft -= 1;
-        this.notify();
-      } else {
-        // Timer expired: auto-resolve selection
-        clearInterval(this.selectionTimerInterval);
-        this.handleSelectionTimeout();
+          if (room.confirmedExerciseId) {
+            this.authoritativeExerciseId = room.confirmedExerciseId;
+          }
+
+          if (room.p1 && room.p2) {
+            this.player1.selectedExerciseId = room.p1.selectedExerciseId;
+            this.player1.isReady = room.p1.isReady;
+            this.player1.calibrationPassed = room.p1.calibrationPassed;
+            this.player1.validReps = room.p1.verifiedReps ?? this.player1.validReps;
+            this.player1.rejectedReps = room.p1.rejectedReps ?? this.player1.rejectedReps;
+
+            this.player2.selectedExerciseId = room.p2.selectedExerciseId;
+            this.player2.isReady = room.p2.isReady;
+            this.player2.calibrationPassed = room.p2.calibrationPassed;
+            this.player2.validReps = room.p2.verifiedReps ?? this.player2.validReps;
+            this.player2.rejectedReps = room.p2.rejectedReps ?? this.player2.rejectedReps;
+          }
+
+          // Advance state based on server room status
+          if (room.status === 'EXERCISE_CONFIRMED' && (this.state === 'EXERCISE_SELECTION' || this.state === 'WAITING_FOR_OPPONENT')) {
+            this.state = 'EXERCISE_CONFIRMED';
+            sound.playLevelUp();
+            this.notify();
+            setTimeout(() => {
+              if (this.state === 'EXERCISE_CONFIRMED') {
+                this.state = 'CALIBRATION';
+                this.notify();
+              }
+            }, 1000);
+          } else if (room.status === 'COUNTDOWN' && this.state === 'CALIBRATION') {
+            this.state = 'COUNTDOWN';
+            this.notify();
+          } else if (room.status === 'ACTIVE' && this.state === 'COUNTDOWN') {
+            this.startActiveBattleClock();
+          } else if (room.status === 'FINISHED' && this.state === 'VERIFYING') {
+            if (room.verifiedResult) {
+              this.verifiedResult = room.verifiedResult;
+              this.state = 'FINISHED';
+              sound.playTrophy();
+              this.notify();
+            }
+          } else if (room.status === 'SETTLED') {
+            if (room.solanaSettlement) {
+              this.solanaSettlement = room.solanaSettlement;
+            }
+            this.state = 'SETTLED';
+            this.notify();
+          } else if (room.status === 'DISCONNECTED') {
+            this.state = 'OPPONENT_DISCONNECTED';
+            this.errorMessage = 'Суперник втратив зʼєднання під час Батлу';
+            this.notify();
+          }
+        }
+      } catch {
+        // ignore poll network glithes
       }
-    }, 1000);
-  }
-
-  private handleSelectionTimeout() {
-    if (this.state !== 'EXERCISE_SELECTION') return;
-
-    // Auto-select candidate if none chosen
-    if (!this.player1.selectedExerciseId) {
-      this.player1.selectedExerciseId = 'pushups_classic';
-    }
-    if (!this.player2.selectedExerciseId) {
-      this.player2.selectedExerciseId = 'pushups_classic';
-    }
-
-    this.player1.isReady = true;
-    this.player2.isReady = true;
-    this.resolveAuthoritativeExercise();
+    }, 1200);
   }
 
   /**
    * User selects an exercise candidate
    */
-  public async selectExerciseCandidate(exerciseId: string): Promise<{ success: boolean; error?: string }> {
+  public async selectExerciseCandidate(exerciseId: string): Promise<{ success: boolean; error?: string; isPremiumRequired?: boolean }> {
     const exercise = EXERCISES.find((e) => e.id === exerciseId);
     if (!exercise) {
       return { success: false, error: 'Вправу не знайдено в каталозі' };
     }
 
-    // Verify camera tracking compatibility
-    const isCameraSupported = 
-      Boolean(exercise.cameraVerifierId) || 
-      Boolean(exercise.cameraTrackingSupported) || 
-      ['push_up', 'squat', 'pull_up', 'dips_bars', 'plank'].some(k => exercise.id.includes(k) || (exercise.category && exercise.category.includes(k)));
-
-    if (!isCameraSupported) {
-      sound.playClick();
-      return { success: false, error: 'Ця вправа не підтримує Camera Verification у Battle Arena' };
-    }
-
-    // Check Premium entitlement on server / store
-    const isPremiumUser = authStore.getCurrentUser()?.isPremium || false;
-    const isExercisePremium = Boolean((exercise as any).premium);
-
-    if (isExercisePremium && !isPremiumUser) {
-      sound.playClick();
-      return { 
-        success: false, 
-        error: 'Ця вправа розблоковується з підпискою Forge Premium 🔒' 
-      };
-    }
-
-    // Assign candidate to my player
-    if (this.myRole === 'player1') {
+    if (!this.roomId) {
       this.player1.selectedExerciseId = exerciseId;
-      this.player1.isReady = false; // Reset ready when changing selection
-    } else {
-      this.player2.selectedExerciseId = exerciseId;
-      this.player2.isReady = false;
+      this.authoritativeExerciseId = exerciseId;
+      this.notify();
+      return { success: true };
     }
 
-    sound.playClick();
+    const currentUser = authStore.getCurrentUser();
+    const userId = currentUser?.id || this.player1.id;
 
-    // Benchmark opponent auto-selects / mirrors compatible choice
-    if (this.player2.id === 'p2_benchmark') {
-      this.player2.selectedExerciseId = exerciseId;
+    try {
+      const res = await fetch('/api/battle/select-exercise', {
+        method: 'POST',
+        headers: authStore.getAuthHeaders(),
+        body: JSON.stringify({
+          battleId: this.roomId,
+          userId,
+          exerciseId
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        return {
+          success: false,
+          error: data.error || 'Помилка вибору вправи',
+          isPremiumRequired: data.isPremiumRequired
+        };
+      }
+
+      this.player1.selectedExerciseId = exerciseId;
+      this.player1.isReady = false;
+      if (data.confirmedExerciseId) {
+        this.authoritativeExerciseId = data.confirmedExerciseId;
+      }
+      this.notify();
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Помилка мережі' };
     }
-
-    this.resolveAuthoritativeExercise();
-    this.syncRoomWithServer();
-    this.notify();
-
-    return { success: true };
   }
 
   /**
-   * Player clicks "Confirm Exercise" / "Ready"
+   * Confirm exercise readiness
    */
-  public confirmExerciseReady(): void {
-    if (this.state !== 'EXERCISE_SELECTION') return;
-
-    if (this.myRole === 'player1') {
-      if (!this.player1.selectedExerciseId) {
-        this.player1.selectedExerciseId = 'pushups_classic';
-      }
-      this.player1.isReady = true;
-    } else {
-      if (!this.player2.selectedExerciseId) {
-        this.player2.selectedExerciseId = 'pushups_classic';
-      }
-      this.player2.isReady = true;
-    }
+  public async confirmExerciseReady(): Promise<void> {
+    if (!this.roomId) return;
+    const currentUser = authStore.getCurrentUser();
+    const userId = currentUser?.id || this.player1.id;
 
     sound.playAnvilHit();
+    this.player1.isReady = true;
+    this.state = 'WAITING_FOR_OPPONENT';
+    this.notify();
 
-    // Benchmark opponent confirms immediately
-    if (this.player2.id === 'p2_benchmark' || !this.player2.isReady) {
-      this.player2.isReady = true;
-      if (!this.player2.selectedExerciseId) {
-        this.player2.selectedExerciseId = this.player1.selectedExerciseId || 'pushups_classic';
-      }
-    }
+    try {
+      const res = await fetch('/api/battle/confirm-ready', {
+        method: 'POST',
+        headers: authStore.getAuthHeaders(),
+        body: JSON.stringify({
+          battleId: this.roomId,
+          userId,
+          ready: true
+        })
+      });
 
-    this.resolveAuthoritativeExercise();
-
-    // Check if both players are ready
-    if (this.player1.isReady && this.player2.isReady) {
-      if (this.selectionTimerInterval) clearInterval(this.selectionTimerInterval);
-      this.state = 'EXERCISE_CONFIRMED';
-      this.notify();
-
-      // Transition to Camera Calibration after short confirmation delay
-      setTimeout(() => {
-        this.state = 'CALIBRATION';
+      const data = await res.json();
+      if (data.status === 'EXERCISE_CONFIRMED' || (data.p1Ready && data.p2Ready)) {
+        this.state = 'EXERCISE_CONFIRMED';
+        sound.playLevelUp();
         this.notify();
-      }, 1200);
-    } else {
-      this.notify();
-    }
 
-    this.syncRoomWithServer();
+        setTimeout(() => {
+          this.state = 'CALIBRATION';
+          this.notify();
+        }, 1200);
+      }
+    } catch {
+      // room polling will sync state
+    }
   }
 
   /**
-   * Player clicks "Change Exercise" before both are ready
+   * Change exercise choice before both confirm
    */
-  public changeExercise(): void {
-    if (this.state !== 'EXERCISE_SELECTION' && this.state !== 'EXERCISE_CONFIRMED') return;
-
-    if (this.myRole === 'player1') {
-      this.player1.isReady = false;
-    } else {
-      this.player2.isReady = false;
-    }
-
+  public async changeExercise(): Promise<void> {
+    this.player1.isReady = false;
     this.state = 'EXERCISE_SELECTION';
     sound.playClick();
     this.notify();
-    this.syncRoomWithServer();
-  }
 
-  /**
-   * Server Authoritative Exercise Resolution
-   */
-  private resolveAuthoritativeExercise() {
-    const p1Choice = this.player1.selectedExerciseId;
-    const p2Choice = this.player2.selectedExerciseId;
-
-    if (p1Choice && p2Choice && p1Choice === p2Choice) {
-      this.authoritativeExerciseId = p1Choice;
-    } else if (p1Choice) {
-      this.authoritativeExerciseId = p1Choice;
-    } else if (p2Choice) {
-      this.authoritativeExerciseId = p2Choice;
-    } else {
-      this.authoritativeExerciseId = 'pushups_classic';
+    if (this.roomId) {
+      const currentUser = authStore.getCurrentUser();
+      const userId = currentUser?.id || this.player1.id;
+      try {
+        await fetch('/api/battle/confirm-ready', {
+          method: 'POST',
+          headers: authStore.getAuthHeaders(),
+          body: JSON.stringify({
+            battleId: this.roomId,
+            userId,
+            ready: false
+          })
+        });
+      } catch {
+        // ignore
+      }
     }
   }
 
   /**
-   * Transition from Camera Calibration to Countdown and Active Battle
+   * Camera calibration passed by athlete
    */
-  public startCountdown(): void {
-    if (this.state !== 'CALIBRATION') return;
-    this.state = 'COUNTDOWN';
-    this.notify();
-
-    setTimeout(() => {
-      this.state = 'ACTIVE';
-      this.battleTimeLeft = 60;
-      sound.playAnvilHit();
+  public async confirmCalibrationPassed(): Promise<void> {
+    if (!this.roomId) {
+      this.state = 'COUNTDOWN';
       this.notify();
-    }, 3000);
+      return;
+    }
+
+    const currentUser = authStore.getCurrentUser();
+    const userId = currentUser?.id || this.player1.id;
+
+    try {
+      const res = await fetch('/api/battle/calibration-ready', {
+        method: 'POST',
+        headers: authStore.getAuthHeaders(),
+        body: JSON.stringify({
+          battleId: this.roomId,
+          userId
+        })
+      });
+
+      const data = await res.json();
+      if (data.status === 'COUNTDOWN') {
+        this.state = 'COUNTDOWN';
+        this.notify();
+      }
+    } catch {
+      this.state = 'COUNTDOWN';
+      this.notify();
+    }
   }
 
   /**
-   * Live rep telemetry update
+   * Launch active 60-second battle clock
    */
-  public updateMyReps(validReps: number, rejectedReps: number, romPercent: number): void {
-    if (this.myRole === 'player1') {
-      this.player1.validReps = validReps;
-      this.player1.rejectedReps = rejectedReps;
-      this.player1.romPercent = romPercent;
-    } else {
-      this.player2.validReps = validReps;
-      this.player2.rejectedReps = rejectedReps;
-      this.player2.romPercent = romPercent;
+  public async startActiveBattleClock(): Promise<void> {
+    this.state = 'ACTIVE';
+    this.battleTimeLeft = 60;
+    this.telemetryFrames = [];
+    sound.playAnvilHit();
+    this.notify();
+
+    if (this.roomId) {
+      try {
+        await fetch('/api/battle/start-active', {
+          method: 'POST',
+          headers: authStore.getAuthHeaders(),
+          body: JSON.stringify({ battleId: this.roomId })
+        });
+      } catch {
+        // ignore
+      }
     }
 
-    // Benchmark opponent simulation if applicable
-    if (this.player2.id === 'p2_benchmark' && this.state === 'ACTIVE') {
-      // Benchmark target rate
-      const targetReps = Math.min(28, Math.floor((60 - this.battleTimeLeft) * 0.45));
-      this.player2.validReps = targetReps;
-    }
+    if (this.battleClockInterval) clearInterval(this.battleClockInterval);
 
+    this.battleClockInterval = setInterval(() => {
+      if (this.battleTimeLeft > 1) {
+        this.battleTimeLeft -= 1;
+        if (this.battleTimeLeft === 11) {
+          sound.playChainTug();
+        } else if (this.battleTimeLeft <= 4 && this.battleTimeLeft >= 2) {
+          sound.playTimerTick();
+        }
+        this.notify();
+      } else {
+        clearInterval(this.battleClockInterval);
+        this.battleTimeLeft = 0;
+        this.finishBattleAndVerify();
+      }
+    }, 1000);
+  }
+
+  /**
+   * Records a frame to telemetry journal
+   */
+  public addTelemetryFrame(frame: TelemetryFrame): void {
+    if (this.state === 'ACTIVE') {
+      this.telemetryFrames.push(frame);
+    }
+  }
+
+  /**
+   * Updates local feedback reps (visual only - server will authoritatively verify telemetry!)
+   */
+  public updateLocalDisplayReps(validReps: number, rejectedReps: number, romPercent: number): void {
+    this.player1.validReps = validReps;
+    this.player1.rejectedReps = rejectedReps;
+    this.player1.romPercent = romPercent;
     this.notify();
   }
 
   /**
-   * Disconnects player or handles disconnect state
+   * Finish 60-second battle and submit telemetry journal for server-side verification
    */
-  public handleOpponentDisconnect(): void {
-    this.state = 'OPPONENT_DISCONNECTED';
-    this.player2.isConnected = false;
-    this.errorMessage = 'Суперник відключився під час підготовки Битви.';
+  public async finishBattleAndVerify(): Promise<void> {
+    if (this.battleClockInterval) clearInterval(this.battleClockInterval);
+    this.state = 'VERIFYING';
+    sound.playGong();
+    this.notify();
+
+    if (!this.roomId) {
+      this.errorMessage = 'Відсутній ID активної сесії батлу';
+      this.state = 'VERIFICATION_FAILED';
+      this.notify();
+      return;
+    }
+
+    // AI Simulator is demo-only: never send it to competitive settlement.
+    if (this.isAiBattle) {
+      const demoReps = Math.max(0, Math.round(this.player1.validReps));
+      const aiReps = Math.max(0, Math.round(demoReps * 0.85));
+      this.player2.validReps = aiReps;
+      this.verifiedResult = {
+        battleId: this.roomId,
+        winnerId: demoReps === aiReps ? 'draw' : (demoReps > aiReps ? this.player1.id : this.player2.id),
+        winnerReps: Math.max(demoReps, aiReps),
+        p1VerifiedReps: demoReps,
+        p2VerifiedReps: aiReps,
+        p1Id: this.player1.id,
+        p2Id: 'ai_forge_simulator',
+        exerciseId: this.authoritativeExerciseId || this.player1.selectedExerciseId || 'pushups_classic',
+        proofHash: '',
+        serverSignature: '',
+        xpAwarded: 0,
+        finishedAt: new Date().toISOString(),
+        verificationStatus: 'AI_SIMULATION_ONLY'
+      };
+      this.state = 'FINISHED';
+      this.solanaSettlement = null;
+      this.notify();
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/battle/verify-session', {
+        method: 'POST',
+        headers: authStore.getAuthHeaders(),
+        body: JSON.stringify({
+          battleId: this.roomId,
+          frames: this.telemetryFrames,
+          sessionNonce: this.sessionNonce
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        this.errorMessage = data.error || 'Помилка серверної верифікації батлу';
+        this.state = 'VERIFICATION_FAILED';
+        this.notify();
+        return;
+      }
+
+      this.verifiedResult = data.verifiedResult;
+      this.player1.validReps = data.verifiedResult.p1VerifiedReps;
+      this.player2.validReps = data.verifiedResult.p2VerifiedReps;
+      this.state = 'FINISHED';
+      sound.playTrophy();
+      this.notify();
+
+      // Automatically trigger real blockchain notarization on server
+      this.settleBlockchain();
+    } catch (err: any) {
+      this.errorMessage = err?.message || 'Помилка звʼязку при верифікації повторень';
+      this.state = 'VERIFICATION_FAILED';
+      this.notify();
+    }
+  }
+
+  /**
+   * Real Solana blockchain settlement
+   */
+  public async settleBlockchain(): Promise<void> {
+    if (!this.roomId || !this.verifiedResult) return;
+
+    try {
+      const res = await fetch('/api/battle/settle-blockchain', {
+        method: 'POST',
+        headers: authStore.getAuthHeaders(),
+        body: JSON.stringify({
+          battleId: this.roomId
+        })
+      });
+
+      const data = await res.json();
+      if (data.settlement) {
+        this.solanaSettlement = data.settlement;
+      }
+      if (data.settlement?.status === 'CONFIRMED') this.state = 'SETTLED';
+      else this.state = 'FINISHED';
+      this.notify();
+    } catch {
+      // Settlement remains retriable
+    }
+  }
+
+  /**
+   * Retry Solana settlement without losing battle outcome
+   */
+  public async retrySolanaSettlement(): Promise<void> {
+    await this.settleBlockchain();
+  }
+
+  /**
+   * Set Camera Error state (strictly prohibits simulation mode in competitive battle)
+   */
+  public setCameraError(message: string): void {
+    this.state = 'CAMERA_ERROR';
+    this.errorMessage = message;
     sound.playClick();
     this.notify();
   }
 
   /**
-   * Reset store state
+   * Leave or forfeit room
+   */
+  public async leaveRoom(): Promise<void> {
+    if (this.roomId) {
+      const currentUser = authStore.getCurrentUser();
+      const userId = currentUser?.id || this.player1.id;
+      try {
+        await fetch('/api/battle/leave-room', {
+          method: 'POST',
+          headers: authStore.getAuthHeaders(),
+          body: JSON.stringify({
+            battleId: this.roomId,
+            userId
+          })
+        });
+      } catch {
+        // ignore
+      }
+    }
+    this.resetState();
+  }
+
+  /**
+   * Reset store state cleanly
    */
   public resetState(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
-    if (this.selectionTimerInterval) clearInterval(this.selectionTimerInterval);
-    if (this.socket) {
-      this.socket.close();
-      this.socket = null;
-    }
+    if (this.battleClockInterval) clearInterval(this.battleClockInterval);
 
     this.state = 'IDLE';
     this.roomId = null;
-    this.authoritativeExerciseId = null;
-    this.selectionTimeLeft = 30;
+    this.sessionNonce = null;
+    this.isAiBattle = false;
+    this.authoritativeExerciseId = 'pushups_classic';
+    this.selectionTimeLeft = 35;
     this.battleTimeLeft = 60;
-    this.winnerId = null;
+    this.verifiedResult = null;
+    this.solanaSettlement = null;
     this.errorMessage = null;
+    this.telemetryFrames = [];
 
-    this.player1.selectedExerciseId = null;
+    this.player1.selectedExerciseId = 'pushups_classic';
     this.player1.isReady = false;
+    this.player1.calibrationPassed = false;
     this.player1.validReps = 0;
     this.player1.rejectedReps = 0;
 
-    this.player2.selectedExerciseId = null;
+    this.player2.selectedExerciseId = 'pushups_classic';
     this.player2.isReady = false;
+    this.player2.calibrationPassed = false;
     this.player2.validReps = 0;
     this.player2.rejectedReps = 0;
 
     this.notify();
-  }
-
-  private async syncRoomWithServer() {
-    if (!this.roomId) return;
-
-    try {
-      await fetch('/api/battle/room/sync', {
-        method: 'POST',
-        headers: authStore.getAuthHeaders(),
-        body: JSON.stringify({
-          roomId: this.roomId,
-          state: this.state,
-          player1: this.player1,
-          player2: this.player2,
-          authoritativeExerciseId: this.authoritativeExerciseId
-        })
-      });
-    } catch {
-      // ignore
-    }
   }
 }
 

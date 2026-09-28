@@ -1,284 +1,226 @@
-import crypto from 'crypto';
+import {
+  Connection,
+  Keypair,
+  Transaction,
+  TransactionInstruction,
+  PublicKey,
+  sendAndConfirmTransaction
+} from '@solana/web3.js';
 
 export type SolanaNetwork = 'devnet' | 'mainnet-beta';
 
 export interface WorkoutProofData {
+  battleId?: string;
   proofHash: string;
-  athleteWallet: string;
+  athleteWallet?: string;
   exercise: string;
   validReps: number;
-  durationSeconds: number;
-  serverSignature: string;
-  timestamp: string;
-}
-
-export interface BattleProofData {
-  proofHash: string;
-  battleId: string;
-  exercise: string;
-  player1Wallet: string;
-  player1Reps: number;
-  player2Wallet: string;
-  player2Reps: number;
-  winnerId: string | 'draw';
-  winnerReps: number;
-  serverSignature: string;
-  timestamp: string;
+  durationSeconds?: number;
+  serverSignature?: string;
+  timestamp?: string;
 }
 
 export interface SolanaRecordResult {
   success: boolean;
+  status: 'CONFIRMED' | 'PENDING' | 'FAILED' | 'NOT_CONFIGURED';
   network: SolanaNetwork;
   signature: string | null;
   explorerUrl: string | null;
   memoContent?: string;
   error?: string;
-  isSimulated?: boolean;
+  settledAt?: string;
 }
 
-const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
-const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-
-function base58Encode(bytes: Uint8Array): string {
-  let value = 0n;
-  for (const byte of bytes) value = (value << 8n) | BigInt(byte);
-  let result = '';
-  while (value > 0n) {
-    const remainder = Number(value % 58n);
-    result = BASE58_ALPHABET[remainder] + result;
-    value /= 58n;
-  }
-  for (const byte of bytes) {
-    if (byte !== 0) break;
-    result = BASE58_ALPHABET[0] + result;
-  }
-  return result || BASE58_ALPHABET[0];
-}
-
-function base58Decode(value: string): Uint8Array {
-  if (!value) return new Uint8Array();
-  let number = 0n;
-  for (const char of value) {
-    const digit = BASE58_ALPHABET.indexOf(char);
-    if (digit < 0) throw new Error('Invalid base58 value');
-    number = number * 58n + BigInt(digit);
-  }
-
-  const bytes: number[] = [];
-  while (number > 0n) {
-    bytes.push(Number(number & 0xffn));
-    number >>= 8n;
-  }
-  bytes.reverse();
-
-  let leadingZeros = 0;
-  while (leadingZeros < value.length && value[leadingZeros] === BASE58_ALPHABET[0]) leadingZeros++;
-  return Uint8Array.from(new Array(leadingZeros).fill(0).concat(bytes));
-}
-
-function encodeShortVec(value: number): Buffer {
-  const out: number[] = [];
-  let remaining = value;
-  do {
-    let elem = remaining & 0x7f;
-    remaining >>>= 7;
-    if (remaining !== 0) elem |= 0x80;
-    out.push(elem);
-  } while (remaining !== 0);
-  return Buffer.from(out);
-}
-
-function readPrivateKeyBytes(raw: string): Uint8Array {
-  const value = raw.trim();
-  if (!value) throw new Error('SOLANA_VERIFIER_PRIVATE_KEY is empty');
-
-  if (value.startsWith('[')) {
-    const parsed = JSON.parse(value);
-    if (!Array.isArray(parsed)) throw new Error('SOLANA_VERIFIER_PRIVATE_KEY JSON must be an array');
-    const bytes = Uint8Array.from(parsed.map(Number));
-    if (bytes.length !== 32 && bytes.length !== 64) throw new Error('Solana private key must contain 32 or 64 bytes');
-    return bytes.slice(0, 32);
-  }
-
-  if (/^[0-9a-fA-F]{64}$/.test(value)) {
-    return new Uint8Array(Buffer.from(value, 'hex'));
-  }
-
-  try {
-    const bytes = new Uint8Array(Buffer.from(value, 'base64'));
-    if (bytes.length === 32 || bytes.length === 64) return bytes.slice(0, 32);
-  } catch {
-    // Try base58 below.
-  }
-
-  const bytes = base58Decode(value);
-  if (bytes.length !== 32 && bytes.length !== 64) throw new Error('Unsupported Solana private key format');
-  return bytes.slice(0, 32);
-}
-
-function ed25519PrivateKey(seed: Uint8Array): crypto.KeyObject {
-  const derPrefix = Buffer.from('302e020100300506032b657004220420', 'hex');
-  return crypto.createPrivateKey({ key: Buffer.concat([derPrefix, Buffer.from(seed)]), format: 'der', type: 'pkcs8' });
-}
-
-function ed25519PublicKey(seed: Uint8Array): Uint8Array {
-  const privateKey = ed25519PrivateKey(seed);
-  const der = crypto.createPublicKey(privateKey).export({ format: 'der', type: 'spki' }) as Buffer;
-  return new Uint8Array(der.subarray(der.length - 32));
-}
-
-function buildMemoMessage(payer: Uint8Array, recentBlockhash: Uint8Array, memo: Buffer): Buffer {
-  const programId = base58Decode(MEMO_PROGRAM_ID);
-  if (payer.length !== 32 || recentBlockhash.length !== 32 || programId.length !== 32) {
-    throw new Error('Invalid Solana account key length');
-  }
-
-  const header = Buffer.from([1, 0, 1]);
-  const accountCount = encodeShortVec(2);
-  const accounts = Buffer.concat([Buffer.from(payer), Buffer.from(programId)]);
-  const instruction = Buffer.concat([
-    Buffer.from([1]), // program id index = memo program
-    encodeShortVec(0),
-    encodeShortVec(memo.length),
-    memo
-  ]);
-
-  return Buffer.concat([
-    header,
-    accountCount,
-    accounts,
-    Buffer.from(recentBlockhash),
-    encodeShortVec(1),
-    instruction
-  ]);
-}
+// SPL Memo Program v2 ID
+const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
 
 /**
- * ForgeMuscle Solana proof bridge.
- *
- * Only compact hashes and Battle metadata are written to Solana.
- * Camera frames, video, biometrics and private user data never go on-chain.
- * A real transaction is considered successful only after Solana RPC confirmation.
+ * Solana Verifier Bridge for ForgeMuscle
+ * 
+ * Strict Blockchain Guarantees:
+ * 1. Server-side isolation: Private keys never leak to frontend.
+ * 2. Privacy: Only minimal cryptographic proof hashes & battle IDs are notarized; raw video/biometrics are NEVER stored on-chain.
+ * 3. Network separation: Devnet vs Mainnet-beta explicit cluster configuration.
+ * 4. Honesty & Anti-Fake: Never output fake transaction signatures or fake explorer links. If RPC or key is not set, explicitly returns NOT_CONFIGURED.
+ * 5. Idempotent settlement: One battleId + proofHash produces at most one blockchain record.
  */
 export class SolanaWorkoutProofService {
   private network: SolanaNetwork;
   private rpcUrl: string;
-  private privateKey: string | null;
+  private privateKeyStr: string | null;
+  private keypair: Keypair | null = null;
+  private connection: Connection | null = null;
+  // Idempotency cache: (battleId + ':' + proofHash) -> SolanaRecordResult
+  private settlementCache = new Map<string, SolanaRecordResult>();
 
   constructor() {
-    this.network = process.env.SOLANA_NETWORK === 'mainnet-beta' ? 'mainnet-beta' : 'devnet';
+    this.network = (process.env.SOLANA_NETWORK === 'mainnet-beta') ? 'mainnet-beta' : 'devnet';
     this.rpcUrl = process.env.SOLANA_RPC_URL || (
-      this.network === 'mainnet-beta'
+      this.network === 'mainnet-beta' 
         ? 'https://api.mainnet-beta.solana.com'
         : 'https://api.devnet.solana.com'
     );
-    this.privateKey = process.env.SOLANA_VERIFIER_PRIVATE_KEY || null;
+    this.privateKeyStr = process.env.SOLANA_VERIFIER_PRIVATE_KEY?.trim() || null;
+    this.initKeypair();
   }
 
-  public getNetwork(): SolanaNetwork { return this.network; }
-  public getRpcUrl(): string { return this.rpcUrl; }
-  public hasPrivateKey(): boolean { return Boolean(this.privateKey); }
+  private initKeypair() {
+    if (!this.privateKeyStr) return;
+    try {
+      this.connection = new Connection(this.rpcUrl, 'confirmed');
 
+      // Check if JSON array: [1,2,3...]
+      if (this.privateKeyStr.startsWith('[') && this.privateKeyStr.endsWith(']')) {
+        const raw = JSON.parse(this.privateKeyStr);
+        this.keypair = Keypair.fromSecretKey(Uint8Array.from(raw));
+      } else if (this.privateKeyStr.length === 128) {
+        // Hex encoded 64-byte key
+        const raw = Buffer.from(this.privateKeyStr, 'hex');
+        this.keypair = Keypair.fromSecretKey(raw);
+      } else {
+        // Base58 encoded
+        // Use basic base58 decode if bs58 is available or decode standard bytes
+        const decoded = this.decodeBase58(this.privateKeyStr);
+        if (decoded && decoded.length === 64) {
+          this.keypair = Keypair.fromSecretKey(decoded);
+        }
+      }
+    } catch (err) {
+      console.warn('[SolanaService] Could not parse SOLANA_VERIFIER_PRIVATE_KEY:', (err as Error).message);
+      this.keypair = null;
+    }
+  }
+
+  private decodeBase58(str: string): Uint8Array | null {
+    const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    const bytes = [0];
+    for (let i = 0; i < str.length; i++) {
+      const c = str[i];
+      const val = ALPHABET.indexOf(c);
+      if (val < 0) return null;
+      for (let j = 0; j < bytes.length; j++) bytes[j] *= 58;
+      bytes[0] += val;
+      let carry = 0;
+      for (let j = 0; j < bytes.length; j++) {
+        bytes[j] += carry;
+        carry = bytes[j] >> 8;
+        bytes[j] &= 0xff;
+      }
+      while (carry > 0) {
+        bytes.push(carry & 0xff);
+        carry >>= 8;
+      }
+    }
+    for (let i = 0; i < str.length && str[i] === '1'; i++) bytes.push(0);
+    return new Uint8Array(bytes.reverse());
+  }
+
+  public getNetwork(): SolanaNetwork {
+    return this.network;
+  }
+
+  public getRpcUrl(): string {
+    return this.rpcUrl;
+  }
+
+  public isConfigured(): boolean {
+    return Boolean(this.keypair);
+  }
+
+  public getVerifierPublicKey(): string | null {
+    return this.keypair ? this.keypair.publicKey.toBase58() : null;
+  }
+
+  /**
+   * Generates public explorer link depending on network cluster
+   */
   public getExplorerUrl(signature: string): string {
-    return this.network === 'mainnet-beta'
-      ? `https://explorer.solana.com/tx/${signature}`
-      : `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+    if (this.network === 'mainnet-beta') {
+      return `https://explorer.solana.com/tx/${signature}`;
+    }
+    return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
   }
 
+  /**
+   * Records workout / battle cryptographic proof on Solana
+   * Idempotent: same (battleId + proofHash) returns existing result without broadcasting duplicate.
+   */
   public async recordProof(proof: WorkoutProofData): Promise<SolanaRecordResult> {
-    const memoContent = `FGM:1:${proof.proofHash}:${proof.validReps}:${proof.exercise}`;
-    return this.broadcastMemoTransaction(memoContent);
-  }
+    const safeRef = (proof.proofHash || '').slice(0, 16);
+    const safeBattleId = proof.battleId || 'battle_' + safeRef;
+    const memoContent = `FGM:BATTLE:1 battle=${safeBattleId} ex=${proof.exercise} proof=${safeRef} reps=${proof.validReps}`;
+    const cacheKey = `${safeBattleId}:${safeRef}`;
 
-  public async recordBattleProof(proof: BattleProofData): Promise<SolanaRecordResult> {
-    const memoContent = [
-      'FGM:BATTLE:1',
-      proof.proofHash,
-      proof.battleId,
-      proof.exercise,
-      proof.player1Reps,
-      proof.player2Reps,
-      proof.winnerId === 'draw' ? 'draw' : proof.winnerId
-    ].join(':');
-
-    return this.broadcastMemoTransaction(memoContent);
-  }
-
-  private async rpc(method: string, params: unknown[]): Promise<any> {
-    const response = await fetch(this.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: `forge-${Date.now()}`, method, params }),
-      signal: AbortSignal.timeout(10000)
-    });
-    if (!response.ok) throw new Error(`Solana RPC HTTP ${response.status}`);
-    const data = await response.json() as any;
-    if (data.error) throw new Error(data.error.message || `Solana RPC ${method} failed`);
-    return data.result;
-  }
-
-  private async broadcastMemoTransaction(memo: string): Promise<SolanaRecordResult> {
-    if (!this.privateKey) {
-      return {
-        success: false,
-        network: this.network,
-        signature: null,
-        explorerUrl: null,
-        memoContent: memo,
-        isSimulated: false,
-        error: 'Solana verifier wallet is not configured. Set SOLANA_VERIFIER_PRIVATE_KEY on the server.'
-      };
+    // 1. Idempotency check: if already confirmed for this battle + proof, return cached
+    const cached = this.settlementCache.get(cacheKey);
+    if (cached && cached.status === 'CONFIRMED') {
+      return cached;
     }
 
-    try {
-      const seed = readPrivateKeyBytes(this.privateKey);
-      const payer = ed25519PublicKey(seed);
-      const blockhashResult = await this.rpc('getLatestBlockhash', [{ commitment: 'confirmed' }]);
-      const recentBlockhash = base58Decode(blockhashResult.value.blockhash);
-      const message = buildMemoMessage(payer, recentBlockhash, Buffer.from(memo, 'utf8'));
-      const signature = crypto.sign(null, message, ed25519PrivateKey(seed));
-
-      const rawTransaction = Buffer.concat([
-        encodeShortVec(1),
-        signature,
-        message
-      ]);
-      const signatureBase58 = base58Encode(new Uint8Array(signature));
-
-      const sendResult = await this.rpc('sendTransaction', [
-        rawTransaction.toString('base64'),
-        { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed' }
-      ]);
-
-      const txSignature = typeof sendResult === 'string' ? sendResult : signatureBase58;
-      await this.rpc('confirmTransaction', [
-        {
-          blockhash: blockhashResult.value.blockhash,
-          lastValidBlockHeight: blockhashResult.value.lastValidBlockHeight,
-          signature: txSignature
-        },
-        'confirmed'
-      ]);
-
-      return {
-        success: true,
-        network: this.network,
-        signature: txSignature,
-        explorerUrl: this.getExplorerUrl(txSignature),
-        memoContent: memo,
-        isSimulated: false
-      };
-    } catch (err: any) {
-      console.error('Solana memo transaction failed:', err);
-      return {
+    // 2. If no valid Solana verifier private key is set on the server, report honest NOT_CONFIGURED status.
+    // Strictly per specification: never return fake signature or fake explorer link.
+    if (!this.keypair || !this.connection) {
+      const notConfiguredResult: SolanaRecordResult = {
         success: false,
+        status: 'NOT_CONFIGURED',
         network: this.network,
         signature: null,
         explorerUrl: null,
-        memoContent: memo,
-        isSimulated: false,
-        error: err?.message || 'Solana transaction failed'
+        memoContent,
+        error: 'Solana Verifier key not configured on server (SOLANA_VERIFIER_PRIVATE_KEY is empty or invalid)',
+        settledAt: new Date().toISOString()
       };
+      this.settlementCache.set(cacheKey, notConfiguredResult);
+      return notConfiguredResult;
+    }
+
+    // 3. Broadcast real SPL Memo transaction signed by verifier keypair
+    try {
+      const instruction = new TransactionInstruction({
+        keys: [{ pubkey: this.keypair.publicKey, isSigner: true, isWritable: true }],
+        programId: MEMO_PROGRAM_ID,
+        data: Buffer.from(memoContent, 'utf-8')
+      });
+
+      const transaction = new Transaction().add(instruction);
+      transaction.feePayer = this.keypair.publicKey;
+
+      const latestBlockhash = await this.connection.getLatestBlockhash('confirmed');
+      transaction.recentBlockhash = latestBlockhash.blockhash;
+
+      const signature = await sendAndConfirmTransaction(
+        this.connection,
+        transaction,
+        [this.keypair],
+        { commitment: 'confirmed', maxRetries: 3 }
+      );
+
+      const confirmedResult: SolanaRecordResult = {
+        success: true,
+        status: 'CONFIRMED',
+        network: this.network,
+        signature,
+        explorerUrl: this.getExplorerUrl(signature),
+        memoContent,
+        settledAt: new Date().toISOString()
+      };
+
+      this.settlementCache.set(cacheKey, confirmedResult);
+      return confirmedResult;
+    } catch (err: any) {
+      console.error('[SolanaService] Transaction broadcast error:', err?.message);
+      const failedResult: SolanaRecordResult = {
+        success: false,
+        status: 'FAILED',
+        network: this.network,
+        signature: null,
+        explorerUrl: null,
+        memoContent,
+        error: err?.message || 'Solana RPC broadcast failed to confirm',
+        settledAt: new Date().toISOString()
+      };
+      // Allow retry on future attempts by not permanently locking as confirmed
+      return failedResult;
     }
   }
 }

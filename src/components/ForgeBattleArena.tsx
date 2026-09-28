@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { VerifiedExerciseKind, VerificationProofEnvelope, Exercise } from '../types';
-import { forgeGameStore } from '../services/forgeGameStore';
+import { Exercise } from '../types';
+import { EXERCISES } from '../data/exercisesData';
+import { battleStore, BattleRoomState } from '../services/battleStore';
+import { authStore } from '../services/authStore';
 import { sound } from '../services/soundEngine';
 import confetti from 'canvas-confetti';
 import { poseService } from '../services/pose/PoseDetectorService';
@@ -29,7 +31,9 @@ import {
   Users,
   Lock,
   RefreshCw,
-  XCircle
+  XCircle,
+  Cpu,
+  ArrowLeft
 } from 'lucide-react';
 
 interface ForgeBattleArenaProps {
@@ -43,122 +47,59 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
   onNavigateToSoloVerifier,
   onNavigateToBilling
 }) => {
-  // Game States
-  const [gameState, setGameState] = useState<
-    'lobby' | 'searching' | 'exercise_selection' | 'waiting_for_opponent' | 'calibration' | 'countdown' | 'battle' | 'settlement' | 'disconnected'
-  >('lobby');
-
-  // Battle Room Config
-  const [battleCode, setBattleCode] = useState<string>('FORGE-8842');
-  const [currentBattleId, setCurrentBattleId] = useState<string>('');
-  const [sessionNonce, setSessionNonce] = useState<string>('NONCE-FGM-INIT');
-  const [timeLeft, setTimeLeft] = useState<number>(60);
+  // Subscribe to unified authoritative battle store
+  const [battleState, setBattleState] = useState<BattleRoomState>(battleStore.getState());
+  const [customRoomCode, setCustomRoomCode] = useState<string>('FORGE-GLOBAL');
   const [preCountdown, setPreCountdown] = useState<number>(3);
-  const [searchSecondsLeft, setSearchSecondsLeft] = useState<number>(20);
-  const searchTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Exercise Catalog & Selection State
-  const [exerciseCatalog, setExerciseCatalog] = useState<any[]>([]);
-  const [isLoadingCatalog, setIsLoadingCatalog] = useState<boolean>(true);
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [selectionTimer, setSelectionTimer] = useState<number>(35);
-
-  // Players Selection & Ready State
-  const [mySelectedExerciseId, setMySelectedExerciseId] = useState<string>('pushups_classic');
-  const [rivalSelectedExerciseId, setRivalSelectedExerciseId] = useState<string | null>(null);
-  const [confirmedExerciseId, setConfirmedExerciseId] = useState<string>('pushups_classic');
-  const [isMyReady, setIsMyReady] = useState<boolean>(false);
-  const [isRivalReady, setIsRivalReady] = useState<boolean>(false);
-  const [premiumLockModal, setPremiumLockModal] = useState<string | null>(null);
-
-  // Opponent Meta
-  const [rivalAthlete, setRivalAthlete] = useState({
-    name: 'Норматив Кузні (Target Benchmark)',
-    wallet: 'FORGE-BENCHMARK-OFFICIAL-SYSTEM',
-    avatar: 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=160&h=160&fit=crop',
-    badge: 'Official Standard'
-  });
-
-  // Calibration State
-  const [calibrationStatus, setCalibrationStatus] = useState<'checking' | 'body_detected' | 'ready'>('checking');
+  const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [calibrationProgress, setCalibrationProgress] = useState<number>(0);
 
-  // Battle Performance Stats
-  const [myValidReps, setMyValidReps] = useState<number>(0);
-  const [myRejectedReps, setMyRejectedReps] = useState<number>(0);
+  // Live feedback during active battle (visual indication only; server-verified upon finish)
+  const [myVisualReps, setMyVisualReps] = useState<number>(0);
+  const [myVisualRejected, setMyVisualRejected] = useState<number>(0);
   const [myRomPercent, setMyRomPercent] = useState<number>(0);
-  const [myRejectCause, setMyRejectCause] = useState<string | null>(null);
+  const [lastRejectCause, setLastRejectCause] = useState<string | null>(null);
 
-  const [rivalValidReps, setRivalValidReps] = useState<number>(0);
-  const [rivalRejectedReps, setRivalRejectedReps] = useState<number>(1);
-  const [rivalRomPercent, setRivalRomPercent] = useState<number>(0);
-
-  // Settlement Data
-  const [settlementResult, setSettlementResult] = useState<{
-    winnerId: string | 'draw';
-    winnerReps: number;
-    solanaTxSignature: string;
-    solanaExplorerUrl: string;
-    proofHash: string;
-  } | null>(null);
-
-  // Camera & Tracking Refs
-  const [cameraStatus, setCameraStatus] = useState<'idle' | 'active' | 'denied' | 'simulation'>('idle');
+  // Camera & Video Canvas refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
-  const battleTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const rivalIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
-  const myWallet = forgeGameStore.getWalletAddress();
-
-  // Load Exercise Catalog on Mount
   useEffect(() => {
-    forgeGameStore.fetchBattleExercises().then((list) => {
-      setExerciseCatalog(list);
-      setIsLoadingCatalog(false);
+    const unsub = battleStore.subscribe((state) => {
+      setBattleState(state);
     });
-
-    forgeGameStore.requestSessionNonce().then(res => {
-      setSessionNonce(res.nonce);
-    });
-
-    setBattleCode(`FORGE-${Math.floor(1000 + Math.random() * 9000)}`);
-
-    return () => {
-      stopCameraStream();
-      if (battleTimerRef.current) clearInterval(battleTimerRef.current);
-      if (rivalIntervalRef.current) clearInterval(rivalIntervalRef.current);
-      if (searchTimerRef.current) clearInterval(searchTimerRef.current);
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    };
+    return () => unsub();
   }, []);
 
-  // Stop camera stream safely
+  // Cleanup camera stream
   const stopCameraStream = useCallback(() => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
   }, []);
 
-  // Initialize camera
+  // Initialize Camera stream with strict error handling (No simulation fallback in PvP!)
   const startCamera = useCallback(async () => {
-    try {
-      stopCameraStream();
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setCameraStatus('simulation');
-        return;
-      }
+    stopCameraStream();
 
+    if (!navigator.mediaDevices?.getUserMedia) {
+      battleStore.setCameraError('Браузер не підтримує доступ до веб-камери (getUserMedia)');
+      return;
+    }
+
+    try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 480 }, height: { ideal: 360 }, facingMode: 'user' },
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
         audio: false
       });
 
@@ -167,278 +108,115 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
           videoRef.current?.play();
-          setCameraStatus('active');
         };
       }
-    } catch {
-      setCameraStatus('simulation');
+    } catch (err: any) {
+      let msg = 'Не вдалося підключити камеру. Будь ласка, надайте дозвіл у браузері.';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        msg = 'Доступ до камери відхилено. Для участі в чесній PvP дуелі потрібна камера.';
+      } else if (err.name === 'NotFoundError') {
+        msg = 'Камеру не знайдено на вашому пристрої.';
+      }
+      battleStore.setCameraError(msg);
     }
   }, [stopCameraStream]);
 
-  // Matchmaking Search
-  const startMatchmakingSearch = async () => {
-    sound.playClick();
-    setGameState('searching');
-    setSearchSecondsLeft(20);
-
-    const res = await forgeGameStore.startMatchmaking({
-      exercise: mySelectedExerciseId,
-      athleteName: 'Ти (Athlete)',
-      athleteWallet: myWallet,
-      roomCode: battleCode
-    });
-
-    if (res && res.battleId) {
-      setCurrentBattleId(res.battleId);
-      if (res.opponent) {
-        setRivalAthlete({
-          name: res.opponent.name || 'Опонент',
-          wallet: res.opponent.wallet || 'FORGE-RIVAL-WAL',
-          avatar: res.opponent.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop',
-          badge: res.opponent.badge || 'Fighter'
-        });
-      }
-    }
-
-    if (searchTimerRef.current) clearInterval(searchTimerRef.current);
-    searchTimerRef.current = setInterval(async () => {
-      setSearchSecondsLeft((prev) => {
-        if (prev <= 1) {
-          if (searchTimerRef.current) clearInterval(searchTimerRef.current);
-          setGameState('exercise_selection');
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  };
-
-  const cancelMatchmakingSearch = () => {
-    sound.playClick();
-    if (searchTimerRef.current) clearInterval(searchTimerRef.current);
-    if (currentBattleId) {
-      forgeGameStore.leaveBattleRoom(currentBattleId, myWallet);
-    }
-    setGameState('lobby');
-  };
-
-  // Real-time synchronization of room state during Exercise Selection
+  // Start camera when entering Calibration
   useEffect(() => {
-    if (gameState !== 'exercise_selection' && gameState !== 'waiting_for_opponent') return;
-
-    const syncInterval = setInterval(async () => {
-      if (!currentBattleId) return;
-      const room = await forgeGameStore.fetchBattleRoomStatus(currentBattleId, myWallet);
-      if (!room) return;
-
-      if (room.status === 'DISCONNECTED') {
-        setGameState('disconnected');
-        clearInterval(syncInterval);
-        return;
-      }
-
-      setSelectionTimer(room.secondsLeft || 0);
-
-      // Determine who is P1 / P2
-      if (room.p1.userId === myWallet || !room.p2.userId) {
-        setRivalSelectedExerciseId(room.p2.selectedExerciseId);
-        setIsRivalReady(room.p2.isReady);
-      } else {
-        setRivalSelectedExerciseId(room.p1.selectedExerciseId);
-        setIsRivalReady(room.p1.isReady);
-      }
-
-      if (room.confirmedExerciseId) {
-        setConfirmedExerciseId(room.confirmedExerciseId);
-      }
-
-      // If room advances to confirmed or both ready -> start Camera Calibration
-      if (room.status === 'EXERCISE_CONFIRMED' || (room.p1.isReady && room.p2.isReady)) {
-        clearInterval(syncInterval);
-        sound.playLevelUp();
-        setGameState('calibration');
-        startCamera();
-      }
-    }, 1000);
-
-    return () => clearInterval(syncInterval);
-  }, [gameState, currentBattleId, myWallet, startCamera]);
-
-  // Handle Exercise Selection Click
-  const handleSelectExercise = async (exId: string, isPremium: boolean) => {
-    sound.playClick();
-    if (isPremium) {
-      // Check user premium entitlement
-      const res = await forgeGameStore.selectBattleExercise(currentBattleId || 'battle_temp', myWallet, exId);
-      if (!res.success && res.isPremiumRequired) {
-        sound.playClick();
-        setPremiumLockModal(exId);
-        return;
-      }
-    }
-
-    setMySelectedExerciseId(exId);
-    setIsMyReady(false); // Reset ready on new choice
-
-    if (currentBattleId) {
-      const res = await forgeGameStore.selectBattleExercise(currentBattleId, myWallet, exId);
-      if (res.confirmedExerciseId) {
-        setConfirmedExerciseId(res.confirmedExerciseId);
-      }
-    } else {
-      setConfirmedExerciseId(exId);
-    }
-  };
-
-  // Confirm Ready Button
-  const handleConfirmReady = async () => {
-    sound.playGong();
-    setIsMyReady(true);
-    setGameState('waiting_for_opponent');
-
-    if (currentBattleId) {
-      const res = await forgeGameStore.confirmBattleReady(currentBattleId, myWallet, true);
-      if (res.status === 'EXERCISE_CONFIRMED') {
-        setGameState('calibration');
-        startCamera();
-      }
-    } else {
-      // Offline / Solo rival fallback -> proceed immediately
-      setTimeout(() => {
-        setIsRivalReady(true);
-        setGameState('calibration');
-        startCamera();
-      }, 1000);
-    }
-  };
-
-  // Change exercise button
-  const handleChangeExercise = () => {
-    sound.playClick();
-    setIsMyReady(false);
-    setGameState('exercise_selection');
-    if (currentBattleId) {
-      forgeGameStore.confirmBattleReady(currentBattleId, myWallet, false);
-    }
-  };
-
-  // Calibration check phase
-  useEffect(() => {
-    if (gameState !== 'calibration') return;
-
-    let calCount = 0;
-    const interval = setInterval(() => {
-      calCount += 25;
-      setCalibrationProgress(calCount);
-      if (calCount >= 100) {
-        clearInterval(interval);
-        setCalibrationStatus('ready');
-      }
-    }, 500);
-
-    return () => clearInterval(interval);
-  }, [gameState]);
-
-  // Launch Countdown (3, 2, 1, GO!)
-  const launchCountdown = () => {
-    sound.playClick();
-    setGameState('countdown');
-    setPreCountdown(3);
-    setMyValidReps(0);
-    setMyRejectedReps(0);
-    setRivalValidReps(0);
-    setRivalRejectedReps(0);
-    setTimeLeft(60);
-    setSettlementResult(null);
-
-    let count = 3;
-    const interval = setInterval(() => {
-      count -= 1;
-      if (count > 0) {
-        setPreCountdown(count);
-        sound.playChainTug();
-      } else {
-        clearInterval(interval);
-        sound.playGong();
-        setGameState('battle');
-        startBattleClock();
-      }
-    }, 1000);
-  };
-
-  // 60-Second Battle Clock & Rival Simulation
-  const startBattleClock = () => {
-    battleTimerRef.current = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(battleTimerRef.current!);
-          finishBattle();
-          return 0;
+    if (battleState.state === 'CALIBRATION') {
+      startCamera();
+      let prog = 0;
+      const calInterval = setInterval(() => {
+        prog += 20;
+        setCalibrationProgress(prog);
+        if (prog >= 100) {
+          clearInterval(calInterval);
         }
+      }, 400);
 
-        if (prev === 11) {
+      return () => clearInterval(calInterval);
+    } else if (battleState.state === 'IDLE' || battleState.state === 'FINISHED' || battleState.state === 'SETTLED') {
+      stopCameraStream();
+    }
+  }, [battleState.state, startCamera, stopCameraStream]);
+
+  // Pre-countdown audio and timer (3, 2, 1, GO)
+  useEffect(() => {
+    if (battleState.state === 'COUNTDOWN') {
+      setPreCountdown(3);
+      setMyVisualReps(0);
+      setMyVisualRejected(0);
+      setLastRejectCause(null);
+
+      let c = 3;
+      const countInterval = setInterval(() => {
+        c -= 1;
+        if (c > 0) {
+          setPreCountdown(c);
           sound.playChainTug();
-        } else if (prev <= 4 && prev >= 2) {
-          sound.playTimerTick();
+        } else {
+          clearInterval(countInterval);
+          battleStore.startActiveBattleClock();
         }
+      }, 1000);
 
-        return prev - 1;
-      });
-    }, 1000);
+      return () => clearInterval(countInterval);
+    }
+  }, [battleState.state]);
 
-    // Competitive rival pacing
-    const rivalTarget = 27 + Math.floor(Math.random() * 6);
-    rivalIntervalRef.current = setInterval(() => {
-      setRivalValidReps((prev) => {
-        if (prev >= 35) return prev;
-        if (Math.random() < 0.08) {
-          setRivalRejectedReps(r => r + 1);
-        }
-        return prev + 1;
-      });
-    }, 1800);
-  };
-
-  // Register verified rep
-  const registerValidRep = useCallback(() => {
-    setMyValidReps((prev) => prev + 1);
-    setMyRejectCause(null);
-    sound.playTrophy();
-  }, []);
-
-  const registerRejectedRep = useCallback((reason: string) => {
-    setMyRejectedReps((prev) => prev + 1);
-    setMyRejectCause(reason);
-    sound.playCoachWhistle();
-  }, []);
-
-  // Pose Tracking Loop during Active Battle
+  // Pose Tracking Loop & Telemetry Accumulation during ACTIVE Battle
   useEffect(() => {
-    if (gameState !== 'battle') return;
+    if (battleState.state !== 'ACTIVE') return;
 
-    // Set PoseDetector to confirmed exercise
-    poseService.setExercise(confirmedExerciseId as any);
+    const currentExerciseId = battleState.authoritativeExerciseId || 'pushups_classic';
+    poseService.setExercise(currentExerciseId as any);
     poseService.resetCounters();
 
     const unsubRep = poseService.onRep(() => {
-      registerValidRep();
+      setMyVisualReps((prev) => {
+        const next = prev + 1;
+        battleStore.updateLocalDisplayReps(next, myVisualRejected, myRomPercent);
+        return next;
+      });
+      setLastRejectCause(null);
+      sound.playTrophy();
     });
 
     const unsubReject = poseService.onReject((reason) => {
-      let msg = 'Неповна амплітуда';
-      if (reason === 'too_shallow') msg = 'Неповна амплітуда (ROM < 80%)';
-      else if (reason === 'bad_alignment') msg = 'Помилка вирівнювання тіла';
-      else if (reason === 'too_fast') msg = 'Занадто швидкий темп / ривок (< 0.7с)';
+      setMyVisualRejected((prev) => {
+        const next = prev + 1;
+        battleStore.updateLocalDisplayReps(myVisualReps, next, myRomPercent);
+        return next;
+      });
+      let msg = 'Неповна амплітуда (ROM < 80%)';
+      if (reason === 'too_fast') msg = 'Занадто швидкий ривок (< 0.7с)';
       else if (reason === 'no_lockout') msg = 'Повне розгинання (lockout)!';
-      registerRejectedRep(msg);
+      setLastRejectCause(msg);
+      sound.playCoachWhistle();
     });
 
     const unsubFrame = poseService.onFrame((result) => {
       setMyRomPercent(result.repProgress);
+
+      // Record compact cryptographically hashed telemetry frame to battleStore
+      const skel = poseService.getLastSkeleton();
+      if (skel) {
+        battleStore.addTelemetryFrame({
+          timestamp: Date.now(),
+          primaryAngle: result.repProgress * 1.5,
+          torsoAngle: 5,
+          confidence: skel.confidence,
+          leftWristY: skel.leftWrist?.y,
+          rightWristY: skel.rightWrist?.y,
+          leftShoulderY: skel.leftShoulder?.y,
+          rightShoulderY: skel.rightShoulder?.y,
+          noseY: skel.nose?.y
+        });
+      }
     });
 
     let isRunning = true;
-    const processFrame = () => {
+    const processVideoFrame = () => {
       if (!isRunning) return;
 
       const video = videoRef.current;
@@ -447,12 +225,12 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
       if (video && canvas && video.readyState >= 2) {
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         if (ctx) {
-          canvas.width = 320;
-          canvas.height = 240;
+          canvas.width = 480;
+          canvas.height = 360;
           ctx.save();
-          ctx.translate(320, 0);
+          ctx.translate(480, 0);
           ctx.scale(-1, 1);
-          ctx.drawImage(video, 0, 0, 320, 240);
+          ctx.drawImage(video, 0, 0, 480, 360);
           ctx.restore();
 
           poseService.sendVideoFrame(video);
@@ -460,15 +238,15 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
           const skel = poseService.getLastSkeleton();
           const res = poseService.getLastResult();
           if (skel && res) {
-            drawBiomechanicalSkeleton(ctx, 320, 240, skel, res, true);
+            drawBiomechanicalSkeleton(ctx, 480, 360, skel, res, true);
           }
         }
       }
 
-      animFrameRef.current = requestAnimationFrame(processFrame);
+      animFrameRef.current = requestAnimationFrame(processVideoFrame);
     };
 
-    animFrameRef.current = requestAnimationFrame(processFrame);
+    animFrameRef.current = requestAnimationFrame(processVideoFrame);
 
     return () => {
       isRunning = false;
@@ -477,154 +255,144 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
       unsubFrame();
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [gameState, confirmedExerciseId, registerValidRep, registerRejectedRep]);
+  }, [battleState.state, battleState.authoritativeExerciseId, myVisualReps, myVisualRejected, myRomPercent]);
 
-  // Finish Battle & Settle Results
-  const finishBattle = async () => {
-    if (rivalIntervalRef.current) clearInterval(rivalIntervalRef.current);
-    if (battleTimerRef.current) clearInterval(battleTimerRef.current);
-    stopCameraStream();
+  // Clean unmount
+  useEffect(() => {
+    return () => {
+      stopCameraStream();
+    };
+  }, [stopCameraStream]);
 
-    sound.playTrophy();
-    confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
-
-    setGameState('settlement');
-
-    const isWin = myValidReps > rivalValidReps;
-    const isDraw = myValidReps === rivalValidReps;
-    const winnerId = isWin ? myWallet : isDraw ? 'draw' : rivalAthlete.wallet;
-
-    const settlement = await forgeGameStore.settleBattleDuel({
-      battleId: currentBattleId || `battle_${Date.now()}`,
-      exercise: confirmedExerciseId as any,
-      player1: {
-        id: myWallet,
-        name: 'Ти (Athlete)',
-        reps: myValidReps
-      },
-      player2: {
-        id: rivalAthlete.wallet,
-        name: rivalAthlete.name,
-        reps: rivalValidReps
-      },
-      winnerId
-    });
-
-    setSettlementResult(settlement);
-  };
-
-  // Filter Catalog
-  const filteredExercises = exerciseCatalog.filter((ex) => {
-    if (selectedCategory !== 'all' && ex.category !== selectedCategory) {
-      return false;
+  // Confetti on win
+  useEffect(() => {
+    if (battleState.state === 'FINISHED' || battleState.state === 'SETTLED') {
+      const isWinner = battleState.verifiedResult?.winnerId === battleState.player1.id;
+      if (isWinner) {
+        confetti({ particleCount: 90, spread: 80, origin: { y: 0.6 } });
+      }
     }
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      return (
-        ex.name.toLowerCase().includes(q) ||
-        ex.description.toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
+  }, [battleState.state, battleState.verifiedResult, battleState.player1.id]);
 
-  const activeConfirmedMeta = exerciseCatalog.find((e) => e.id === confirmedExerciseId) || exerciseCatalog[0] || {
-    name: 'Класичні віджимання',
-    description: 'Базова вправа'
-  };
+  const activeConfirmedMeta = EXERCISES.find(e => e.id === battleState.authoritativeExerciseId) || EXERCISES[0];
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-8 animate-fadeIn">
       {/* ========================================================================= */}
       {/* 1. LOBBY STATE */}
       {/* ========================================================================= */}
-      {gameState === 'lobby' && (
+      {battleState.state === 'IDLE' && (
         <div className="space-y-8">
-          <div className="text-center max-w-2xl mx-auto space-y-3">
-            <span className="text-xs font-bold uppercase tracking-wider text-amber-400 bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/30">
-              Battle Arena • 1v1 Verified Reps
-            </span>
-            <h1 className="text-3xl sm:text-4xl font-black text-neutral-100 font-epic uppercase tracking-tight">
-              Битва Таборів та Камера-Дуелі
-            </h1>
-            <p className="text-xs sm:text-sm text-neutral-400">
-              Оберіть суперника, узгодьте вправу та доведіть силу у 60-секундному камера-спринті з компʼютерним аналізом кутів рухів.
-            </p>
+          {/* Hero Banner */}
+          <div className="relative overflow-hidden rounded-3xl border-2 border-amber-500/40 bg-gradient-to-br from-neutral-950 via-neutral-900 to-amber-950/30 p-8 sm:p-12 shadow-2xl">
+            <div className="relative z-10 max-w-2xl space-y-4">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-bold uppercase tracking-wider">
+                <Swords className="w-3.5 h-3.5" />
+                Forge Battle Arena • Live 1v1 PvP
+              </div>
+
+              <h1 className="text-3xl sm:text-5xl font-black text-white font-epic tracking-tight leading-none">
+                АРЕНА БИТВ КУЗНІ
+              </h1>
+
+              <p className="text-neutral-300 text-sm sm:text-base leading-relaxed">
+                60-секундний поєдинок у прямому ефірі перед камерою. Вибір вправи, серверна біомеханічна верифікація та криптографічний запис результату на Solana.
+              </p>
+
+              <div className="flex flex-wrap gap-4 pt-4">
+                <div className="flex items-center gap-2 text-xs font-semibold text-neutral-300 bg-neutral-900/80 px-3 py-1.5 rounded-xl border border-neutral-800">
+                  <Camera className="w-4 h-4 text-amber-400" />
+                  Чесна Камера (Real CV)
+                </div>
+                <div className="flex items-center gap-2 text-xs font-semibold text-neutral-300 bg-neutral-900/80 px-3 py-1.5 rounded-xl border border-neutral-800">
+                  <Shield className="w-4 h-4 text-emerald-400" />
+                  Серверний Античит
+                </div>
+                <div className="flex items-center gap-2 text-xs font-semibold text-neutral-300 bg-neutral-900/80 px-3 py-1.5 rounded-xl border border-neutral-800">
+                  <Sparkles className="w-4 h-4 text-purple-400" />
+                  Solana Memo Proof
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
-            {/* Find Match Card */}
-            <div className="rounded-3xl border border-amber-500/30 bg-neutral-900/80 p-8 flex flex-col justify-between space-y-6 hover:border-amber-500/60 transition-all">
+          {/* Matchmaking Selection Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* PvP Competitive Arena */}
+            <div className="rounded-3xl border-2 border-amber-500/60 bg-neutral-900/90 p-8 space-y-6 shadow-xl flex flex-col justify-between">
               <div className="space-y-4">
-                <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center">
-                  <Swords className="w-6 h-6" />
-                </div>
-                <div>
-                  <h3 className="text-xl font-bold text-neutral-100">Матчмейкінг 1v1</h3>
-                  <p className="text-xs text-neutral-400 mt-1">
-                    Автоматичний пошук рівного за рангом атлета або дуель проти офіційного нормативу Кузні.
-                  </p>
+                <div className="flex items-center justify-between">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30">
+                    <Users className="w-6 h-6" />
+                  </div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-400 bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/30">
+                    PvP Рейтинг
+                  </span>
                 </div>
 
-                <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-2 text-xs">
-                  <div className="flex justify-between text-neutral-300">
-                    <span>Кімната дуелі:</span>
-                    <span className="font-mono text-amber-400 font-bold">#{battleCode}</span>
-                  </div>
-                  <div className="flex justify-between text-neutral-400">
-                    <span>Тривалість раунду:</span>
-                    <span className="font-mono font-bold text-neutral-200">60 секунд</span>
-                  </div>
-                  <div className="flex justify-between text-neutral-400">
-                    <span>Верифікація:</span>
-                    <span className="text-emerald-400 font-semibold">AI Camera Angles</span>
-                  </div>
+                <h3 className="text-2xl font-bold text-neutral-100">Змагальна Дуель 1v1</h3>
+                <p className="text-xs text-neutral-400 leading-relaxed">
+                  Пошук реального суперника за кодом кімнати або у глобальній черзі Кузні. Обидва гравці узгоджують вправу, проходять калібрування та змагаються за очки XP.
+                </p>
+
+                {/* Room Code input */}
+                <div className="space-y-2 pt-2">
+                  <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block">
+                    Код Кімнати
+                  </label>
+                  <input
+                    type="text"
+                    value={customRoomCode}
+                    onChange={(e) => setCustomRoomCode(e.target.value.toUpperCase())}
+                    placeholder="FORGE-GLOBAL"
+                    className="w-full px-4 py-3 rounded-xl bg-neutral-950 border border-neutral-800 text-amber-300 font-mono font-bold text-sm focus:border-amber-500 focus:outline-none uppercase"
+                  />
                 </div>
               </div>
 
               <button
-                onClick={startMatchmakingSearch}
-                className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-neutral-950 font-extrabold text-sm shadow-[0_0_25px_rgba(245,158,11,0.3)] transition-all cursor-pointer flex items-center justify-center gap-2"
+                onClick={() => {
+                  sound.playClick();
+                  battleStore.startMatchmaking(customRoomCode, 'pvp');
+                }}
+                className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-neutral-950 font-black text-sm uppercase tracking-wider shadow-[0_0_20px_rgba(245,158,11,0.3)] transition-all cursor-pointer flex items-center justify-center gap-2"
               >
-                <Users className="w-4 h-4" />
-                Знайти суперника (Matchmaking)
+                <Swords className="w-4 h-4" />
+                Знайти суперника (PvP Битва)
               </button>
             </div>
 
-            {/* Direct Code / Challenge Card */}
-            <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-8 flex flex-col justify-between space-y-6">
+            {/* AI Benchmark Sparring (Explicitly Labeled) */}
+            <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-8 space-y-6 shadow-xl flex flex-col justify-between">
               <div className="space-y-4">
-                <div className="w-12 h-12 rounded-2xl bg-neutral-800 border border-neutral-700 text-neutral-300 flex items-center justify-center">
-                  <Share2 className="w-6 h-6" />
-                </div>
-                <div>
-                  <h3 className="text-xl font-bold text-neutral-100">Виклик по посиланню</h3>
-                  <p className="text-xs text-neutral-400 mt-1">
-                    Створіть приватний код та надішліть його другу для прямого поєдинку.
-                  </p>
+                <div className="flex items-center justify-between">
+                  <div className="w-12 h-12 rounded-2xl bg-purple-500/20 text-purple-400 flex items-center justify-center border border-purple-500/30">
+                    <Cpu className="w-6 h-6" />
+                  </div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-purple-400 bg-purple-500/10 px-3 py-1 rounded-full border border-purple-500/30">
+                    AI Спаринг
+                  </span>
                 </div>
 
-                <div className="p-3.5 rounded-2xl bg-neutral-950 border border-neutral-800 flex items-center justify-between">
-                  <span className="text-xs font-mono text-neutral-300">
-                    {window.location.origin}/#duel-{battleCode}
-                  </span>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(`${window.location.origin}/#duel-${battleCode}`);
-                      sound.playClick();
-                    }}
-                    className="p-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium cursor-pointer"
-                  >
-                    Копіювати
-                  </button>
+                <h3 className="text-2xl font-bold text-neutral-100">AI Тренувальний Режим</h3>
+                <p className="text-xs text-neutral-400 leading-relaxed">
+                  Тренувальний спаринг проти алгоритму Forge. Повний цикл вибору вправи та компʼютерного зору без очікування онлайн-суперника.
+                </p>
+
+                <div className="p-3.5 rounded-2xl bg-neutral-950/80 border border-neutral-800 text-[11px] text-neutral-400">
+                  ℹ️ Результати спарингу маркуються як AI-тренування і не викривляють рейтинг живих поєдинків.
                 </div>
               </div>
 
               <button
-                onClick={startMatchmakingSearch}
-                className="w-full py-4 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-sm transition-all cursor-pointer flex items-center justify-center gap-2"
+                onClick={() => {
+                  sound.playClick();
+                  battleStore.startMatchmaking(customRoomCode, 'ai');
+                }}
+                className="w-full py-4 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-neutral-100 font-bold text-sm uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2"
               >
-                Створити приватну дуель
+                <Cpu className="w-4 h-4 text-purple-400" />
+                Викликати AI-спаринг
               </button>
             </div>
           </div>
@@ -632,26 +400,33 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* 2. SEARCHING STATE */}
+      {/* 2. MATCHMAKING SEARCHING STATE */}
       {/* ========================================================================= */}
-      {gameState === 'searching' && (
-        <div className="max-w-md mx-auto text-center space-y-6 py-12">
-          <div className="relative w-20 h-20 mx-auto">
-            <div className="absolute inset-0 rounded-full border-4 border-amber-500/20 border-t-amber-500 animate-spin" />
-            <div className="absolute inset-0 flex items-center justify-center text-amber-400 font-extrabold font-mono text-xl">
-              {searchSecondsLeft}s
+      {battleState.state === 'MATCHMAKING' && (
+        <div className="max-w-md mx-auto text-center space-y-8 py-12">
+          {/* Animated Radar Pulse */}
+          <div className="relative w-36 h-36 mx-auto flex items-center justify-center">
+            <div className="absolute inset-0 rounded-full bg-amber-500/20 animate-ping" />
+            <div className="absolute inset-4 rounded-full bg-amber-500/30 animate-pulse" />
+            <div className="relative w-20 h-20 rounded-full bg-neutral-950 border-2 border-amber-500 flex items-center justify-center text-amber-400 text-3xl shadow-[0_0_30px_rgba(245,158,11,0.5)]">
+              <Swords className="w-9 h-9" />
             </div>
           </div>
 
           <div className="space-y-2">
-            <h2 className="text-2xl font-bold text-neutral-100 font-epic uppercase">Шукаємо суперника...</h2>
+            <h2 className="text-2xl font-black text-neutral-100 font-epic">
+              ПОШУК СУПЕРНИКА
+            </h2>
             <p className="text-xs text-neutral-400">
-              Пошук активного атлета в кімнаті #{battleCode}. Автоматичний підбір за рангом.
+              Підключення до кімнати <span className="font-mono text-amber-300 font-bold">{battleState.roomCode}</span>
             </p>
           </div>
 
           <button
-            onClick={cancelMatchmakingSearch}
+            onClick={() => {
+              sound.playClick();
+              battleStore.leaveRoom();
+            }}
             className="px-6 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold cursor-pointer"
           >
             Скасувати пошук
@@ -660,91 +435,58 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* 3. EXERCISE SELECTION SCREEN (MAIN FEATURE) */}
+      {/* 3. EXERCISE SELECTION & WAITING FOR OPPONENT */}
       {/* ========================================================================= */}
-      {(gameState === 'exercise_selection' || gameState === 'waiting_for_opponent') && (
+      {(battleState.state === 'EXERCISE_SELECTION' || battleState.state === 'WAITING_FOR_OPPONENT') && (
         <BattleExerciseSelection
           onBackToArena={() => {
             sound.playClick();
-            setGameState('lobby');
+            battleStore.leaveRoom();
           }}
           onExerciseConfirmed={(selectedEx: Exercise) => {
             sound.playAnvilHit();
-            setConfirmedExerciseId(selectedEx.id);
-            setMySelectedExerciseId(selectedEx.id);
-            setGameState('calibration');
-            startCamera();
+            battleStore.confirmCalibrationPassed();
           }}
           onNavigateToPremium={onNavigateToBilling}
         />
       )}
 
-      {/* Premium Lock Alert Modal */}
-      {premiumLockModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-3xl border border-amber-500/40 bg-neutral-950 p-6 space-y-4 text-center">
-            <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
-              <Lock className="w-6 h-6" />
-            </div>
-            <h3 className="text-lg font-bold text-neutral-100">Forge Premium Вправа</h3>
-            <p className="text-xs text-neutral-400">
-              Ця вправа вимагає підтвердженого статусу Forge Premium для використання у батлах.
-            </p>
-            <div className="flex gap-2 pt-2">
-              <button
-                onClick={() => setPremiumLockModal(null)}
-                className="flex-1 py-2.5 rounded-xl bg-neutral-900 text-neutral-400 text-xs font-bold"
-              >
-                Закрити
-              </button>
-              <button
-                onClick={() => {
-                  setPremiumLockModal(null);
-                  if (onNavigateToBilling) onNavigateToBilling();
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-amber-500 text-neutral-950 text-xs font-bold"
-              >
-                Активувати Premium
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ========================================================================= */}
-      {/* 4. CALIBRATION STATE */}
+      {/* 4. CALIBRATION STATE (Real Camera Feed) */}
       {/* ========================================================================= */}
-      {gameState === 'calibration' && (
+      {battleState.state === 'CALIBRATION' && (
         <div className="max-w-xl mx-auto space-y-6 text-center py-6">
           <div className="space-y-2">
             <span className="text-xs font-bold uppercase tracking-wider text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/30">
-              Калібрування Позиції
+              Калібрування Камери
             </span>
             <h2 className="text-2xl font-bold text-neutral-100 font-epic">
-              Камера-Верифікація: {activeConfirmedMeta.name}
+              Вправа: {activeConfirmedMeta.name}
             </h2>
             <p className="text-xs text-neutral-400">
-              Станьте перед камерою так, щоб усе тіло увійшло в кадр. Система перевіряє лінійність скелета.
+              Займіть вихідну позицію. Система перевіряє потрапляння всього тіла у поле зору камери.
             </p>
           </div>
 
           <div className="relative aspect-video max-w-sm mx-auto rounded-3xl overflow-hidden border-2 border-amber-500/50 bg-neutral-950 shadow-2xl">
-            <video ref={videoRef} className="w-full h-full object-cover hidden" playsInline />
+            <video ref={videoRef} className="w-full h-full object-cover hidden" playsInline muted />
             <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
-            {/* Skeleton Status Banner */}
             <div className="absolute bottom-3 left-3 right-3 p-2.5 rounded-xl bg-black/80 backdrop-blur-md border border-emerald-500/40 text-emerald-400 text-xs font-bold flex items-center justify-between">
               <span className="flex items-center gap-1.5">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Скелет виявлено в кадрі
+                Скелет калібровано
               </span>
               <span className="font-mono">{calibrationProgress}%</span>
             </div>
           </div>
 
           <button
-            onClick={launchCountdown}
-            className="px-8 py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-neutral-950 font-extrabold text-sm shadow-[0_0_25px_rgba(245,158,11,0.4)] transition-all cursor-pointer"
+            onClick={() => {
+              sound.playGong();
+              battleStore.confirmCalibrationPassed();
+            }}
+            className="px-8 py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-neutral-950 font-black text-sm shadow-[0_0_25px_rgba(245,158,11,0.4)] transition-all cursor-pointer"
           >
             Розпочати 60s Спринт (Countdown)
           </button>
@@ -754,41 +496,41 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
       {/* ========================================================================= */}
       {/* 5. COUNTDOWN & ACTIVE BATTLE */}
       {/* ========================================================================= */}
-      {(gameState === 'countdown' || gameState === 'battle') && (
+      {(battleState.state === 'COUNTDOWN' || battleState.state === 'ACTIVE') && (
         <div className="space-y-6">
           {/* Top HUD Stats */}
           <div className="grid grid-cols-3 items-center gap-4 p-4 rounded-2xl bg-neutral-900 border border-neutral-800">
             {/* My Score */}
             <div className="text-left">
-              <span className="text-[10px] font-bold uppercase text-amber-400 block">Ваші Верифіковані Репи</span>
-              <div className="text-3xl font-black text-amber-300 font-mono">{myValidReps}</div>
-              <span className="text-[10px] text-rose-400 font-medium">Відхилено: {myRejectedReps}</span>
+              <span className="text-[10px] font-bold uppercase text-amber-400 block">Ваші Повторення</span>
+              <div className="text-3xl font-black text-amber-300 font-mono">{myVisualReps}</div>
+              <span className="text-[10px] text-rose-400 font-medium">Відхилено: {myVisualRejected}</span>
             </div>
 
             {/* Battle Timer */}
             <div className="text-center">
               <div className="text-2xl font-black text-neutral-100 font-mono tracking-wider">
-                00:{timeLeft < 10 ? `0${timeLeft}` : timeLeft}
+                00:{battleState.battleTimeLeft < 10 ? `0${battleState.battleTimeLeft}` : battleState.battleTimeLeft}
               </div>
               <span className="text-[10px] font-bold text-neutral-500 uppercase">{activeConfirmedMeta.name}</span>
             </div>
 
             {/* Rival Score */}
             <div className="text-right">
-              <span className="text-[10px] font-bold uppercase text-neutral-400 block">{rivalAthlete.name}</span>
-              <div className="text-3xl font-black text-neutral-200 font-mono">{rivalValidReps}</div>
-              <span className="text-[10px] text-neutral-500 font-medium">Норматив: 28</span>
+              <span className="text-[10px] font-bold uppercase text-neutral-400 block">{battleState.player2.name}</span>
+              <div className="text-3xl font-black text-neutral-200 font-mono">{battleState.player2.validReps}</div>
+              <span className="text-[10px] text-neutral-500 font-medium">{battleState.player2.badge || (battleState.player2.isAi ? 'AI Coach' : 'Суперник')}</span>
             </div>
           </div>
 
           {/* Camera Canvas View */}
           <div className="relative aspect-video max-w-2xl mx-auto rounded-3xl overflow-hidden border-2 border-amber-500/50 bg-neutral-950 shadow-2xl">
-            <video ref={videoRef} className="w-full h-full object-cover hidden" playsInline />
+            <video ref={videoRef} className="w-full h-full object-cover hidden" playsInline muted />
             <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
             {/* Pre-battle Countdown Overlay */}
-            {gameState === 'countdown' && (
-              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center">
+            {battleState.state === 'COUNTDOWN' && (
+              <div className="absolute inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center">
                 <div className="text-center space-y-2">
                   <div className="text-7xl font-black text-amber-400 font-mono animate-bounce">
                     {preCountdown}
@@ -801,9 +543,9 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
             )}
 
             {/* Reject cause notification */}
-            {myRejectCause && (
+            {lastRejectCause && (
               <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-rose-500/90 text-neutral-950 font-extrabold text-xs shadow-lg animate-pulse">
-                ⚠️ {myRejectCause}
+                ⚠️ {lastRejectCause}
               </div>
             )}
           </div>
@@ -811,9 +553,26 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* 6. SETTLEMENT & RESULT STATE */}
+      {/* 6. SERVER VERIFICATION PROGRESS */}
       {/* ========================================================================= */}
-      {gameState === 'settlement' && (
+      {battleState.state === 'VERIFYING' && (
+        <div className="max-w-md mx-auto text-center space-y-6 py-16">
+          <div className="w-16 h-16 rounded-full border-4 border-amber-500/20 border-t-amber-500 animate-spin mx-auto" />
+          <div className="space-y-2">
+            <h2 className="text-2xl font-black text-neutral-100 font-epic">
+              СЕРВЕРНА ВЕРИФІКАЦІЯ
+            </h2>
+            <p className="text-xs text-neutral-400">
+              Біомеханічний аналіз кадрів, перевірка nonce, античит та підписання криптографічного доказу...
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 7. SETTLEMENT & VERIFIED RESULT */}
+      {/* ========================================================================= */}
+      {(battleState.state === 'FINISHED' || battleState.state === 'SETTLED') && (
         <div className="max-w-md mx-auto text-center space-y-6 py-8">
           <div className="p-8 rounded-3xl border-2 border-amber-500 bg-neutral-900/90 space-y-6 shadow-2xl">
             <div className="w-16 h-16 rounded-3xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center mx-auto text-3xl">
@@ -822,72 +581,145 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
 
             <div className="space-y-1">
               <h2 className="text-3xl font-black text-neutral-100 font-epic uppercase">
-                {myValidReps > rivalValidReps ? 'ПЕРЕМОГА!' : myValidReps === rivalValidReps ? 'НІЧИЯ!' : 'ПОРАЗКА'}
+                {battleState.verifiedResult?.winnerId === battleState.player1.id
+                  ? 'ПЕРЕМОГА!'
+                  : battleState.verifiedResult?.winnerId === 'draw'
+                  ? 'НІЧИЯ!'
+                  : 'ПОРАЗКА'}
               </h2>
               <p className="text-xs text-neutral-400">
-                Раунд верифіковано компʼютерним аналізом. Результати занесено до Forge Passport.
+                Результати верифіковано сервером Кузні. Нараховано +{battleState.verifiedResult?.xpAwarded || 30} XP.
               </p>
             </div>
 
             <div className="grid grid-cols-2 gap-3 p-4 rounded-2xl bg-neutral-950 border border-neutral-800 text-xs">
               <div>
                 <span className="text-neutral-500 block">Ваш результат</span>
-                <span className="text-xl font-bold text-amber-300 font-mono">{myValidReps} репів</span>
+                <span className="text-xl font-bold text-amber-300 font-mono">
+                  {battleState.verifiedResult?.p1VerifiedReps || 0} репів
+                </span>
               </div>
               <div>
-                <span className="text-neutral-500 block">Суперник</span>
-                <span className="text-xl font-bold text-neutral-300 font-mono">{rivalValidReps} репів</span>
+                <span className="text-neutral-500 block">{battleState.player2.name}</span>
+                <span className="text-xl font-bold text-neutral-300 font-mono">
+                  {battleState.verifiedResult?.p2VerifiedReps || 0} репів
+                </span>
               </div>
             </div>
 
-            {settlementResult && (
+            {/* Proof Hash & Cryptographic Attestation */}
+            {battleState.verifiedResult && (
               <div className="p-3.5 rounded-2xl bg-neutral-950 border border-neutral-800 text-left text-[11px] space-y-2 font-mono">
-                {settlementResult.solanaTxSignature ? (
-                  <>
-                    <div className="text-emerald-400 font-semibold flex items-center gap-1.5">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Solana On-Chain Proof Recorded
-                    </div>
-                    <div className="text-neutral-400 truncate">Hash: {settlementResult.proofHash || '—'}</div>
-                    {settlementResult.solanaExplorerUrl && (
-                      <a
-                        href={settlementResult.solanaExplorerUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 text-amber-400 hover:text-amber-300 font-semibold"
-                      >
-                        Переглянути транзакцію в Solana Explorer <ExternalLink className="w-3 h-3" />
-                      </a>
-                    )}
-                    <div className="text-neutral-500 truncate">Tx: {settlementResult.solanaTxSignature}</div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-amber-400 font-semibold flex items-center gap-1.5">
-                      <AlertTriangle className="w-3.5 h-3.5" />
-                      Solana Proof не записано
-                    </div>
-                    <div className="text-neutral-500">Результат Battle збережено, але реальна on-chain транзакція не була підтверджена.</div>
-                  </>
-                )}
+                <div className="text-emerald-400 font-semibold flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Server Verified Proof
+                </div>
+                <div className="text-neutral-400 truncate">
+                  Hash: {battleState.verifiedResult.proofHash}
+                </div>
               </div>
             )}
 
+            {/* Solana Blockchain Status */}
+            <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 text-left space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-neutral-300 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                  Solana Notarization
+                </span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  battleState.solanaSettlement?.status === 'CONFIRMED'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                    : battleState.solanaSettlement?.status === 'NOT_CONFIGURED'
+                    ? 'bg-neutral-800 text-neutral-400'
+                    : 'bg-amber-500/20 text-amber-400'
+                }`}>
+                  {battleState.solanaSettlement?.status || 'PENDING'}
+                </span>
+              </div>
+
+              {battleState.solanaSettlement?.status === 'CONFIRMED' && battleState.solanaSettlement.explorerUrl && (
+                <a
+                  href={battleState.solanaSettlement.explorerUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 font-semibold pt-1"
+                >
+                  Переглянути транзакцію в Solana Explorer
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              )}
+
+              {battleState.solanaSettlement?.status === 'NOT_CONFIGURED' && (
+                <p className="text-[11px] text-neutral-500">
+                  Solana Verifier key не налаштовано на сервері. Криптографічний доказ збережено у базі даних Forge.
+                </p>
+              )}
+
+              {(battleState.solanaSettlement?.status === 'FAILED' || !battleState.solanaSettlement) && (
+                <button
+                  onClick={() => battleStore.retrySolanaSettlement()}
+                  className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold cursor-pointer"
+                >
+                  Повторити запис на Solana
+                </button>
+              )}
+            </div>
+
             <button
               onClick={() => {
-                setGameState('lobby');
+                battleStore.resetState();
                 sound.playClick();
               }}
-              className="w-full py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-extrabold cursor-pointer"
+              className="w-full py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-extrabold cursor-pointer uppercase tracking-wider"
             >
-              Нова дуель
+              Нова битва
             </button>
           </div>
         </div>
       )}
 
-      {/* Disconnected State */}
-      {gameState === 'disconnected' && (
+      {/* ========================================================================= */}
+      {/* 8. CAMERA ERROR (STRICT NO SIMULATION IN PVP) */}
+      {/* ========================================================================= */}
+      {battleState.state === 'CAMERA_ERROR' && (
+        <div className="max-w-md mx-auto text-center space-y-6 py-12">
+          <div className="w-16 h-16 rounded-3xl bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto text-2xl border border-rose-500/40">
+            <CameraOff className="w-8 h-8" />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-xl font-bold text-neutral-100">Потрібна камера для PvP Дуелі</h3>
+            <p className="text-xs text-neutral-400 leading-relaxed">
+              {battleState.errorMessage || 'Для участі у змагальному PvP Батлі обовʼязкова робоча камера. Симуляція заборонена задля чесності змагань.'}
+            </p>
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={() => {
+                sound.playClick();
+                battleStore.leaveRoom();
+              }}
+              className="flex-1 py-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-bold cursor-pointer"
+            >
+              Вийти в лобі
+            </button>
+            <button
+              onClick={() => {
+                sound.playClick();
+                startCamera();
+              }}
+              className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-bold cursor-pointer"
+            >
+              Спробувати знову
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 9. OPPONENT DISCONNECTED */}
+      {/* ========================================================================= */}
+      {battleState.state === 'OPPONENT_DISCONNECTED' && (
         <div className="max-w-md mx-auto text-center space-y-6 py-12">
           <div className="w-14 h-14 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto text-2xl border border-rose-500/40">
             <XCircle className="w-8 h-8" />
@@ -895,11 +727,11 @@ export const ForgeBattleArena: React.FC<ForgeBattleArenaProps> = ({
           <div className="space-y-2">
             <h3 className="text-xl font-bold text-neutral-100">Суперник відключився</h3>
             <p className="text-xs text-neutral-400">
-              Звʼязок з другим гравцем було втрачено під час вибору вправи. Спробуйте новий матчмейкінг.
+              Звʼязок з другим гравцем було розірвано. Спробуйте новий матчмейкінг або викличте AI-тренера.
             </p>
           </div>
           <button
-            onClick={() => setGameState('lobby')}
+            onClick={() => battleStore.resetState()}
             className="px-6 py-2.5 rounded-xl bg-amber-500 text-neutral-950 text-xs font-bold cursor-pointer"
           >
             Повернутися у лобі

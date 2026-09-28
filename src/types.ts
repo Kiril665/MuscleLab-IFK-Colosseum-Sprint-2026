@@ -906,7 +906,7 @@ export interface VerificationProofEnvelope {
   timestamp: string;
   solanaTxSignature: string | null;
   solanaExplorerUrl: string | null;
-  status: 'VERIFIED_ON_CHAIN' | 'VERIFIED_FORGE' | 'VERIFIED_LOCAL' | 'REJECTED_CHEAT_DETECTED' | 'PENDING';
+  status: 'VERIFIED_ON_CHAIN' | 'VERIFIED_FORGE' | 'REJECTED_CHEAT_DETECTED' | 'PENDING';
 }
 
 export interface VerifiedAchievement {

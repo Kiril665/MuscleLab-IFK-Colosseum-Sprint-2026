@@ -12,9 +12,9 @@ import { solanaService } from './server/solana';
 dotenv.config();
 
 // Enforce required verifier secret with development fallback
-const FORGE_VERIFIER_SECRET = process.env.FORGE_VERIFIER_SECRET || 'forgemuscle_default_verifier_secret_dev';
-if (!process.env.FORGE_VERIFIER_SECRET) {
-  console.warn('[Config Warning] FORGE_VERIFIER_SECRET environment variable is missing. Using development fallback secret.');
+const FORGE_VERIFIER_SECRET = process.env.FORGE_VERIFIER_SECRET || '';
+if (!FORGE_VERIFIER_SECRET && process.env.NODE_ENV === 'production') {
+  throw new Error('FORGE_VERIFIER_SECRET is required in production.');
 }
 
 // In-memory + file-backed Cloud Store for ForgeMuscle users
@@ -28,6 +28,7 @@ interface StoredSession {
   ip: string;
   createdAt: string;
   lastActive: string;
+  expiresAt: string;
 }
 
 interface StoredUser {
@@ -336,15 +337,16 @@ function createSession(userId: string, req: express.Request): StoredSession {
   const clientInfo = parseUserAgent(req.headers['user-agent']);
   const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
   const session: StoredSession = {
-    id: `ses_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    id: `ses_${crypto.randomBytes(16).toString('hex')}`,
     userId,
-    token: `fgt_${Math.random().toString(36).substring(2)}_${Date.now()}`,
+    token: `fgt_${crypto.randomBytes(32).toString('base64url')}`,
     device: clientInfo.device,
     browser: clientInfo.browser,
     os: clientInfo.os,
     ip: ip.split(',')[0].trim(),
     createdAt: new Date().toISOString(),
-    lastActive: new Date().toISOString()
+    lastActive: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
   };
 
   db.sessions.push(session);
@@ -359,7 +361,7 @@ function getAuthSession(req: express.Request): StoredSession | null {
   }
   const token = authHeader.substring(7).trim();
   const session = db.sessions.find(s => s.token === token);
-  if (session) {
+  if (session && new Date(session.expiresAt || new Date(new Date(session.createdAt).getTime() + 7 * 86400000).toISOString()).getTime() > Date.now()) {
     session.lastActive = new Date().toISOString();
     saveDatabase(db);
     return session;
@@ -444,22 +446,52 @@ async function startServer() {
 
   // ==================== AUTH ROUTES ====================
 
-  // Google OAuth / OpenID Connect Registration & Sign In
-  app.post('/api/auth/google', (req, res) => {
+  // Google OAuth / OpenID Connect Registration & Sign In (Server Token Verification)
+  app.post('/api/auth/google', async (req, res) => {
     try {
-      const { email, name, picture, googleId, credential } = req.body;
-      if (!email) {
-        return res.status(400).json({ error: "We couldn't sign you in. Email is required." });
+      const { credential, id_token } = req.body;
+      const rawToken = credential || id_token;
+
+      if (!rawToken) {
+        return res.status(400).json({ error: "Необхідно надати дійсний Google ID Token / OpenID Connect credential." });
+      }
+
+      let verifiedEmail = '';
+      let verifiedName = '';
+      let verifiedPicture = '';
+      let verifiedGoogleId = '';
+
+      try {
+        // Cryptographic verification with Google's public tokeninfo endpoint
+        const googleRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(rawToken)}`);
+        if (googleRes.ok) {
+          const payload = await googleRes.json() as any;
+          const expectedAud = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID;
+          if (expectedAud && payload.aud !== expectedAud) {
+            return res.status(401).json({ error: 'Google credential має неправильний audience.' });
+          }
+          if (!payload.email || !payload.sub || payload.email_verified !== 'true') {
+            return res.status(401).json({ error: "Недійсний Google ID Token: відсутні обов'язкові верифіковані поля." });
+          }
+          verifiedEmail = payload.email.toLowerCase();
+          verifiedName = payload.name || payload.given_name || payload.email.split('@')[0];
+          verifiedPicture = payload.picture || '';
+          verifiedGoogleId = payload.sub;
+        } else {
+          return res.status(401).json({ error: "Недійсний або прострочений Google ID Token." });
+        }
+      } catch (tokenErr) {
+        return res.status(502).json({ error: "Не вдалося зв'язатися з серверами автентифікації Google. Будь ласка, увійдіть через Email та Пароль." });
       }
 
       // Check if user already exists
-      let user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase() || (googleId && u.googleId === googleId));
+      let user = db.users.find(u => u.email.toLowerCase() === verifiedEmail || (verifiedGoogleId && u.googleId === verifiedGoogleId));
       let isNewUser = false;
 
       if (!user) {
         isNewUser = true;
-        // Generate clean username from name or email
-        const base = (name || email.split('@')[0]).replace(/[^a-zA-Z0-9_]/g, '');
+        // Generate clean username from verified name or email
+        const base = verifiedName.replace(/[^a-zA-Z0-9_]/g, '');
         let username = `@${base || 'Athlete'}`;
         let counter = 1;
         while (db.users.some(u => u.username.toLowerCase() === username.toLowerCase())) {
@@ -469,15 +501,15 @@ async function startServer() {
         user = {
           id: `usr_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`,
           username,
-          displayName: name || email.split('@')[0],
-          email: email.toLowerCase(),
-          avatar: picture || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces',
+          displayName: verifiedName,
+          email: verifiedEmail,
+          avatar: verifiedPicture || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces',
           authProvider: 'google',
-          googleId: googleId || `goog_${Date.now()}`,
+          googleId: verifiedGoogleId,
           role: 'USER',
           createdAt: new Date().toISOString(),
           lastLogin: new Date().toISOString(),
-          bio: 'Новий атлет кузні ForgeMuscle.',
+          bio: 'Атлет кузні ForgeMuscle.',
           discipline: 'hybrid',
           level: 1,
           xp: 150,
@@ -506,8 +538,11 @@ async function startServer() {
         db.users.push(user);
       } else {
         user.lastLogin = new Date().toISOString();
-        if (picture && (!user.avatar || user.avatar.includes('placeholder'))) {
-          user.avatar = picture;
+        if (verifiedGoogleId && !user.googleId) {
+          user.googleId = verifiedGoogleId;
+        }
+        if (verifiedPicture && (!user.avatar || user.avatar.includes('placeholder'))) {
+          user.avatar = verifiedPicture;
         }
       }
 
@@ -522,20 +557,52 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Google Auth Error:', err);
-      res.status(500).json({ error: "We couldn't sign you in. Please try again." });
+      res.status(500).json({ error: "Помилка сервера при авторизації через Google." });
     }
   });
 
-  // Local Register
+  // Local Register (Server-authoritative validation & scrypt hash)
   app.post('/api/auth/register', (req, res) => {
     try {
-      const { email, username, password, displayName } = req.body;
+      const { email, username, password, confirmPassword, displayName } = req.body;
       if (!email || !username || !password) {
-        return res.status(400).json({ error: "Будь ласка, заповніть всі обов'язкові поля." });
+        return res.status(400).json({ error: "Будь ласка, заповніть всі обов'язкові поля (Email, Username, Пароль)." });
       }
 
-      const normalizedUsername = username.startsWith('@') ? username : `@${username}`;
-      if (db.users.some(u => u.email.toLowerCase() === email.toLowerCase())) {
+      // 1. Email format validation
+      const emailTrimmed = email.trim().toLowerCase();
+      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+      if (!emailRegex.test(emailTrimmed)) {
+        return res.status(400).json({ error: "Введіть коректну адресу електронної пошти." });
+      }
+
+      // 2. Username format validation
+      const rawUsername = username.trim().replace(/^@/, '');
+      if (rawUsername.length < 3 || rawUsername.length > 25) {
+        return res.status(400).json({ error: "Username повинен містити від 3 до 25 символів." });
+      }
+      if (!/^[a-zA-Z0-9_]+$/.test(rawUsername)) {
+        return res.status(400).json({ error: "Username може містити лише латинські літери, цифри та символ підкреслення (_)." });
+      }
+
+      const reservedUsernames = ['admin', 'moderator', 'system', 'root', 'benchmark', 'bot', 'ai_forge', 'support', 'forgemuscle'];
+      if (reservedUsernames.includes(rawUsername.toLowerCase())) {
+        return res.status(400).json({ error: `Username @${rawUsername} зарезервовано системою. Будь ласка, оберіть інший.` });
+      }
+
+      const normalizedUsername = `@${rawUsername}`;
+
+      // 3. Password length & match validation
+      if (password.length < 8) {
+        return res.status(400).json({ error: "Пароль повинен містити щонайменше 8 символів." });
+      }
+
+      if (confirmPassword !== undefined && confirmPassword !== password) {
+        return res.status(400).json({ error: "Введені паролі не збігаються." });
+      }
+
+      // 4. Uniqueness validation
+      if (db.users.some(u => u.email.toLowerCase() === emailTrimmed)) {
         return res.status(400).json({ error: "Користувач з такою електронною поштою вже зареєстрований." });
       }
       if (db.users.some(u => u.username.toLowerCase() === normalizedUsername.toLowerCase())) {
@@ -545,8 +612,8 @@ async function startServer() {
       const newUser: StoredUser = {
         id: `usr_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`,
         username: normalizedUsername,
-        displayName: displayName || username.replace('@', ''),
-        email: email.toLowerCase(),
+        displayName: displayName?.trim() || rawUsername,
+        email: emailTrimmed,
         passwordHash: hashPassword(password),
         avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces',
         authProvider: 'local',
@@ -682,12 +749,11 @@ async function startServer() {
         });
       }
 
-      const resetToken = crypto.randomBytes(24).toString('hex');
-      user.passwordResetToken = resetToken;
+      const resetToken = crypto.randomBytes(32).toString('hex');
+      const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+      user.passwordResetToken = resetTokenHash;
       user.passwordResetExpires = new Date(Date.now() + 3600000).toISOString(); // 1 hour
       saveDatabase(db);
-
-      console.log(`[Password Reset] Generated reset token for ${user.email}: ${resetToken}`);
 
       res.json({
         success: true,
@@ -714,7 +780,7 @@ async function startServer() {
 
       const now = new Date().toISOString();
       const user = db.users.find(u => 
-        u.passwordResetToken === token && 
+        u.passwordResetToken === crypto.createHash('sha256').update(token).digest('hex') && 
         u.passwordResetExpires && 
         u.passwordResetExpires > now
       );
@@ -1459,7 +1525,7 @@ async function startServer() {
   }
 
   // Verifier Public Authority Key (Secures results on Solana)
-  const VERIFIER_AUTHORITY_PUBKEY = 'ForgeVerifier111111111111111111111111111111';
+  const VERIFIER_AUTHORITY_PUBKEY = solanaService.getVerifierPublicKey() || 'NOT_CONFIGURED';
 
   // In-memory active nonces for anti-replay & liveness
   interface ActiveSessionNonce {
@@ -1468,6 +1534,7 @@ async function startServer() {
     createdAt: number;
     challenge: string;
     used: boolean;
+    usedBy?: string[];
   }
   const activeNonces = new Map<string, ActiveSessionNonce>();
 
@@ -1554,13 +1621,14 @@ async function startServer() {
   }
 
   function getOrCreatePassport(walletOrUserId: string): ServerPassport {
-    const cleanId = walletOrUserId || 'default_athlete';
+    const cleanId = walletOrUserId;
+    if (!cleanId) throw new Error('Passport requires an authenticated user or linked wallet.');
     if (!passports.has(cleanId)) {
       const matchedUser = db.users.find(u => u.id === cleanId || u.username === cleanId || cleanId.includes(u.id));
       const newPassport: ServerPassport = {
         walletAddress: cleanId.startsWith('usr_') ? `${generateBase58String(32)}` : cleanId,
         userId: cleanId,
-        athleteName: matchedUser ? (matchedUser.displayName || matchedUser.username) : 'Кузнець Forge',
+        athleteName: matchedUser ? (matchedUser.displayName || matchedUser.username) : undefined,
         avatar: matchedUser?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces',
         battlesCount: 0,
         winsCount: 0,
@@ -1588,7 +1656,11 @@ async function startServer() {
 
   // 1. Issue Session Nonce (Anti-Replay & Liveness Challenge)
   app.get('/api/verifier/session-nonce', (req, res) => {
-    const athleteWallet = (req.query.wallet as string) || '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
+    const session = getAuthSession(req);
+    if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+    const user = db.users.find(u => u.id === session.userId);
+    if (!user) return res.status(404).json({ error: 'Користувача не знайдено.' });
+    const athleteWallet = user.walletAddress || user.id;
     const nonce = `NONCE-FGM-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
     const challenges = [
       'Статична фіксація вихідної позиції 3с',
@@ -1616,21 +1688,20 @@ async function startServer() {
   // 2. Verify Workout Session (Truth Engine: CV verification + Server Attestation + Solana Settlement)
   app.post('/api/verifier/verify-workout', (req, res) => {
     try {
+      const session = getAuthSession(req);
+      if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+      const callerUserId = session.userId;
       const {
         nonce,
         exercise,
         durationSeconds,
-        validReps,
-        rejectedReps,
-        rejectionReasons,
-        repDetails,
-        frames,
-        athleteWallet,
-        athleteName
+        frames
       } = req.body;
 
-      const wallet = athleteWallet || '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
-      const name = athleteName || 'Кузнець Forge';
+      const caller = db.users.find(u => u.id === callerUserId);
+      if (!caller) return res.status(404).json({ error: 'Користувача не знайдено.' });
+      const wallet = caller.walletAddress || caller.id;
+      const name = caller.displayName || caller.username;
 
       // 1. Verify Nonce (Anti-Replay)
       const nonceObj = activeNonces.get(nonce);
@@ -1639,7 +1710,14 @@ async function startServer() {
         if (nonceObj.used || Date.now() - nonceObj.createdAt > 15 * 60 * 1000) {
           antiReplayNonceValid = false;
         } else {
-          nonceObj.used = true;
+          const usedBy = nonceObj.usedBy || [];
+          if (usedBy.includes(callerUserId)) {
+            antiReplayNonceValid = false;
+          } else {
+            usedBy.push(callerUserId);
+            nonceObj.usedBy = usedBy;
+            nonceObj.used = usedBy.length >= 2;
+          }
         }
       } else {
         antiReplayNonceValid = false;
@@ -1647,6 +1725,9 @@ async function startServer() {
 
       // 2. Anti-Replay: Hash the raw frame journal array
       const rawFrames: TelemetryFrame[] = Array.isArray(frames) ? frames : [];
+      if (rawFrames.length < 20) {
+        return res.status(400).json({ error: 'Недостатньо telemetry frames для серверної верифікації.' });
+      }
       const framesString = JSON.stringify(rawFrames);
       const framesJournalHash = crypto.createHash('sha256').update(framesString).digest('hex');
 
@@ -1661,11 +1742,13 @@ async function startServer() {
       }
 
       // 3. Independent Server-Side Biomechanical State Machine Verification
-      const clientValidReps = Number(validReps) || 0;
+      if (rawFrames.length < 20) {
+        return res.status(400).json({ error: 'Недостатньо telemetry frames для серверної верифікації.' });
+      }
       const verification = verifyWorkoutFrameJournal(
         exercise,
         rawFrames,
-        clientValidReps,
+        0,
         nonceObj?.challenge
       );
 
@@ -1705,7 +1788,8 @@ async function startServer() {
       });
       const proofHash = crypto.createHash('sha256').update(proofPayload).digest('hex');
 
-      // 5. Generate Server Verifier signature using FORGE_VERIFIER_SECRET directly
+      // 5. Generate Server Verifier signature using the server-only HMAC secret.
+      if (!FORGE_VERIFIER_SECRET) return res.status(503).json({ error: 'FORGE_VERIFIER_SECRET не налаштований.' });
       const hmac = crypto.createHmac('sha256', FORGE_VERIFIER_SECRET);
       hmac.update(proofHash);
       const serverSignature = hmac.digest('hex');
@@ -1805,215 +1889,71 @@ async function startServer() {
     }
   });
 
-  // 3. Settle Forge Battle (60-second Duel Result + optional real Solana proof)
-  app.post('/api/battle/settle-duel', async (req, res) => {
-    try {
-      const { battleId, exercise, player1, player2 } = req.body;
-      const room = battleId ? activeBattleRooms.get(battleId) : undefined;
-
-      // If the battle room exists, bind settlement to the server-authoritative exercise.
-      const authoritativeExercise = room?.confirmedExerciseId || exercise;
-      if (!authoritativeExercise) {
-        return res.status(400).json({ error: 'Battle exercise has not been confirmed by the server.' });
-      }
-      if (room?.confirmedExerciseId && room.confirmedExerciseId !== exercise) {
-        return res.status(409).json({ error: 'Battle exercise does not match the server-authoritative exercise.' });
-      }
-
-      const p1Valid = Number(player1?.validReps) || 0;
-      const p2Valid = Number(player2?.validReps) || 0;
-      if (p1Valid < 0 || p1Valid > 150 || p2Valid < 0 || p2Valid > 150) {
-        return res.status(400).json({ error: 'Недійсні параметри повторень дуелі.' });
-      }
-
-      let winnerId: string | 'draw' = 'draw';
-      let winnerReps = p1Valid;
-      let winnerWallet = player1?.wallet || player1?.id || '';
-      if (p1Valid > p2Valid) {
-        winnerId = player1?.id || 'player1';
-        winnerReps = p1Valid;
-        winnerWallet = player1?.wallet || player1?.id || '';
-      } else if (p2Valid > p1Valid) {
-        winnerId = player2?.id || 'player2';
-        winnerReps = p2Valid;
-        winnerWallet = player2?.wallet || player2?.id || '';
-      } else {
-        winnerWallet = '';
-      }
-
-      const settlementId = battleId || `duel_${Date.now()}`;
-      const timestamp = new Date().toISOString();
-      const duelProofString = JSON.stringify({
-        battleId: settlementId,
-        exercise: authoritativeExercise,
-        player1: { wallet: player1?.wallet, validReps: p1Valid, rejectedReps: Number(player1?.rejectedReps) || 0 },
-        player2: { wallet: player2?.wallet, validReps: p2Valid, rejectedReps: Number(player2?.rejectedReps) || 0 },
-        winnerId,
-        winnerReps,
-        timestamp
-      });
-      const proofHash = crypto.createHash('sha256').update(duelProofString).digest('hex');
-      const hmac = crypto.createHmac('sha256', FORGE_VERIFIER_SECRET).update(proofHash).digest('hex');
-
-      // Update Passports for participants. Solana never receives raw camera/video/biometric data.
-      if (player1?.wallet) {
-        const passport1 = getOrCreatePassport(player1.wallet);
-        passport1.battlesCount += 1;
-        passport1.totalVerifiedReps += p1Valid;
-        if (winnerId === player1.id || p1Valid > p2Valid) passport1.winsCount += 1;
-        else if (winnerId !== 'draw') passport1.lossesCount += 1;
-        passport1.forgeTier = calculateForgeTier(passport1.totalVerifiedReps, passport1.winsCount);
-      }
-
-      if (player2?.wallet && player2.wallet !== player1?.wallet) {
-        const passport2 = getOrCreatePassport(player2.wallet);
-        passport2.battlesCount += 1;
-        passport2.totalVerifiedReps += p2Valid;
-        if (winnerId === player2.id || p2Valid > p1Valid) passport2.winsCount += 1;
-        else if (winnerId !== 'draw') passport2.lossesCount += 1;
-        passport2.forgeTier = calculateForgeTier(passport2.totalVerifiedReps, passport2.winsCount);
-      }
-
-      const solana = await solanaService.recordBattleProof({
-        proofHash,
-        battleId: settlementId,
-        exercise: authoritativeExercise,
-        player1Wallet: String(player1?.wallet || ''),
-        player1Reps: p1Valid,
-        player2Wallet: String(player2?.wallet || ''),
-        player2Reps: p2Valid,
-        winnerId,
-        winnerReps,
-        serverSignature: hmac,
-        timestamp
-      });
-
-      const status = solana.success ? 'VERIFIED_DUEL_ON_CHAIN' : 'VERIFIED_DUEL_OFF_CHAIN';
-      res.json({
-        settlement: {
-          battleId: settlementId,
-          exercise: authoritativeExercise,
-          winnerId,
-          winnerReps,
-          proofHash,
-          serverSignature: hmac,
-          solanaTx: {
-            signature: solana.signature,
-            status: solana.success ? 'confirmed' : 'not_recorded',
-            timestamp,
-            proofHash,
-            explorerUrl: solana.explorerUrl,
-            error: solana.error || null,
-            isSimulated: false
-          },
-          status,
-          winnerWallet
-        }
-      });
-    } catch (err: any) {
-      console.error('Battle settlement error:', err);
-      res.status(500).json({ error: 'Failed to settle duel' });
-    }
-  });
-
-  // 4. Battle Matchmaking, Exercise Selection & Room State Machine
-  interface BattleRoomSession {
-    battleId: string;
-    roomCode: string;
-    createdAt: number;
-    updatedAt: number;
-    status: 'EXERCISE_SELECTION' | 'WAITING_FOR_OPPONENT' | 'EXERCISE_CONFIRMED' | 'CALIBRATION' | 'COUNTDOWN' | 'ACTIVE' | 'FINISHED' | 'DISCONNECTED';
-    selectionTimeoutAt: number;
-    confirmedExerciseId: string | null;
-    p1: {
-      userId: string;
-      name: string;
-      wallet: string;
-      avatar: string;
-      badge: string;
-      isPremium: boolean;
-      selectedExerciseId: string | null;
-      isReady: boolean;
-      lastPing: number;
-    };
-    p2: {
-      userId: string;
-      name: string;
-      wallet: string;
-      avatar: string;
-      badge: string;
-      isPremium: boolean;
-      selectedExerciseId: string | null;
-      isReady: boolean;
-      lastPing: number;
-    };
-  }
-
-  const activeBattleRooms = new Map<string, BattleRoomSession>();
+  // ==================== 3. PRODUCTION BATTLE ENGINE & SERVER VERIFICATION ====================
 
   const BATTLE_EXERCISES_CATALOG = [
     {
       id: 'pushups_classic',
-      name: 'Класичні віджимання',
+      name: 'Класичні віджимання від підлоги',
       category: 'upper_body',
       type: 'dynamic',
       difficulty: 'beginner',
       equipment: 'none',
       premium: false,
       verifier: 'push_up',
-      description: 'Базова вправа для грудей, трицепсів та стабілізації кору.',
+      description: 'Фундаментальна базова вправа для розвитку грудних мʼязів, трицепсів та стабілізації кору.',
       icon: '💪',
       isBattleSupported: true
     },
     {
       id: 'pushups_wide_grip',
-      name: 'Широкі віджимання',
+      name: 'Віджимання з широкою постановкою рук',
       category: 'upper_body',
       type: 'dynamic',
       difficulty: 'intermediate',
       equipment: 'none',
       premium: false,
       verifier: 'push_up',
-      description: 'Розширене залучення зовнішніх пучків грудних мʼязів.',
+      description: 'Варіація віджимань із широкою постановкою долонь для акцентованого навантаження на зовнішні пучки грудей.',
       icon: '⚡',
       isBattleSupported: true
     },
     {
       id: 'diamond_pushups',
-      name: 'Алмазні віджимання (Diamond)',
+      name: 'Алмазні віджимання (Diamond Push-ups)',
       category: 'upper_body',
       type: 'dynamic',
       difficulty: 'intermediate',
       equipment: 'none',
       premium: false,
       verifier: 'push_up',
-      description: 'Вузький хват долонь алмазом для акценту на трицепс.',
+      description: 'Вузька постановка рук алмазом для ізольованого пікового навантаження на трицепс.',
       icon: '💎',
       isBattleSupported: true
     },
     {
       id: 'squats_bodyweight',
-      name: 'Присідання без ваги',
+      name: 'Присідання з власною вагою',
       category: 'legs',
       type: 'dynamic',
       difficulty: 'beginner',
       equipment: 'none',
       premium: false,
       verifier: 'squat',
-      description: 'Глибокі присідання з контролем колін і випрямленням стегон.',
+      description: 'Базова вправа для квадрицепсів, сідниць та стабілізаторів колін із контролем паралелі.',
       icon: '🦵',
       isBattleSupported: true
     },
     {
       id: 'pullups_classic',
-      name: 'Класичні підтягування',
+      name: 'Класичні підтягування на турніку',
       category: 'upper_body',
       type: 'dynamic',
       difficulty: 'intermediate',
       equipment: 'pullup_bar',
       premium: false,
       verifier: 'pull_up',
-      description: 'Тяга підборіддя вище перекладини для потужної спини.',
+      description: 'Золотий стандарт розвитку найширших мʼязів спини, біцепсів та сили хвата.',
       icon: '🧗',
       isBattleSupported: true
     },
@@ -2026,20 +1966,20 @@ async function startServer() {
       equipment: 'parallel_bars',
       premium: true,
       verifier: 'dips_bars',
-      description: 'Королівська калістенічна вправа для низу грудей і трицепсів.',
+      description: 'Королівська калістенічна вправа для масивного низу грудей і потужних трицепсів.',
       icon: '🔒',
       isBattleSupported: true
     },
     {
       id: 'pike_pushups',
-      name: 'Pike Віджимання (Плечі)',
+      name: 'Pike Віджимання (Акцент на дельти)',
       category: 'upper_body',
       type: 'dynamic',
       difficulty: 'advanced',
       equipment: 'none',
       premium: true,
       verifier: 'pike_pushups',
-      description: 'Вертикальний кут тазу для акценту на дельтоподібні мʼязи.',
+      description: 'Кут тазу для переносу навантаження на передні та середні дельтоподібні мʼязи.',
       icon: '🔒',
       isBattleSupported: true
     },
@@ -2052,85 +1992,292 @@ async function startServer() {
       equipment: 'none',
       premium: true,
       verifier: 'archer_pushups',
-      description: 'Почергове опускання на одну руку з випрямленням іншої.',
+      description: 'Почергове опускання на одну руку з випрямленням іншої — крок до віджимань на одній руці.',
       icon: '🔒',
+      isBattleSupported: true
+    },
+    {
+      id: 'bulgarian_split_squats',
+      name: 'Болгарські спліт-присідання',
+      category: 'legs',
+      type: 'dynamic',
+      difficulty: 'intermediate',
+      equipment: 'none',
+      premium: false,
+      verifier: 'squat',
+      description: 'Одноножні присідання з опорою на задню ногу для глибини та балансу сідниць.',
+      icon: '🛡️',
+      isBattleSupported: true
+    },
+    {
+      id: 'chin_ups',
+      name: 'Підтягування зворотним хватом (Chin-ups)',
+      category: 'upper_body',
+      type: 'dynamic',
+      difficulty: 'intermediate',
+      equipment: 'pullup_bar',
+      premium: false,
+      verifier: 'pull_up',
+      description: 'Супінований хват долонями до себе з акцентом на біцепси та нижню частину найширших.',
+      icon: '🔥',
       isBattleSupported: true
     }
   ];
 
-  // GET /api/battle/exercises — returns exercise catalog available for Battle
-  app.get('/api/battle/exercises', (req, res) => {
-    res.json({ exercises: BATTLE_EXERCISES_CATALOG });
-  });
+  interface BattleRoomSession {
+    battleId: string;
+    roomCode: string;
+    createdAt: number;
+    updatedAt: number;
+    status:
+      | 'MATCHMAKING'
+      | 'MATCH_FOUND'
+      | 'EXERCISE_SELECTION'
+      | 'WAITING_FOR_OPPONENT'
+      | 'EXERCISE_CONFIRMED'
+      | 'CALIBRATION'
+      | 'COUNTDOWN'
+      | 'ACTIVE'
+      | 'VERIFYING'
+      | 'FINISHED'
+      | 'SETTLED'
+      | 'CANCELLED'
+      | 'DISCONNECTED'
+      | 'VERIFICATION_FAILED';
+    isAiBattle: boolean;
+    selectionTimeoutAt: number;
+    confirmedExerciseId: string | null;
+    battleStartTime: number | null;
+    battleEndTime: number | null;
+    sessionNonce: string;
+    p1: {
+      userId: string;
+      name: string;
+      wallet: string;
+      avatar: string;
+      badge: string;
+      isPremium: boolean;
+      selectedExerciseId: string | null;
+      isReady: boolean;
+      calibrationPassed: boolean;
+      lastPing: number;
+      verifiedReps: number;
+      rejectedReps: number;
+      telemetryJournalHash?: string;
+      framesCount?: number;
+      verificationStatus?: string;
+    };
+    p2: {
+      userId: string;
+      name: string;
+      wallet: string;
+      avatar: string;
+      badge: string;
+      isPremium: boolean;
+      selectedExerciseId: string | null;
+      isReady: boolean;
+      calibrationPassed: boolean;
+      lastPing: number;
+      verifiedReps: number;
+      rejectedReps: number;
+      telemetryJournalHash?: string;
+      framesCount?: number;
+      verificationStatus?: string;
+    };
+    verifiedResult?: {
+      battleId: string;
+      winnerId: string | 'draw';
+      winnerReps: number;
+      p1VerifiedReps: number;
+      p2VerifiedReps: number;
+      p1Id: string;
+      p2Id: string;
+      exerciseId: string;
+      proofHash: string;
+      serverSignature: string;
+      xpAwarded: number;
+      finishedAt: string;
+      verificationStatus: string;
+    };
+    solanaSettlement?: {
+      status: 'CONFIRMED' | 'PENDING' | 'FAILED' | 'NOT_CONFIGURED';
+      signature: string | null;
+      explorerUrl: string | null;
+      memoContent?: string;
+      error?: string;
+      settledAt?: string;
+    };
+  }
+
+  const activeBattleRooms = new Map<string, BattleRoomSession>();
 
   interface WaitingFighter {
     id: string;
     exercise: string;
     athleteName: string;
     athleteWallet: string;
+    userId: string;
     roomCode: string;
     joinedAt: number;
     timeoutSeconds: number;
   }
   const matchmakingQueue = new Map<string, WaitingFighter>();
 
+  // GET /api/battle/exercises — returns canonical exercises available for Battle
+  app.get('/api/battle/exercises', (req, res) => {
+    res.json({ exercises: BATTLE_EXERCISES_CATALOG });
+  });
+
+  // POST /api/battle/matchmake — Server-authoritative matchmaking
   app.post('/api/battle/matchmake', (req, res) => {
     try {
-      const { exercise = 'pushups_classic', athleteName, athleteWallet, roomCode } = req.body;
+      const { 
+        exercise = 'pushups_classic', 
+        roomCode, 
+        mode = 'pvp'
+      } = req.body;
+
+      const normalizedMode = String(mode || 'pvp').toLowerCase();
       const normalizedRoom = (roomCode || 'FORGE-GLOBAL').toUpperCase();
       const fighterKey = `${normalizedRoom}_queue`;
       const now = Date.now();
 
-      // Check auth for premium check
-      const authHeader = req.headers.authorization;
-      let isPremium = false;
-      let currentUserId = athleteWallet || `user_${Date.now()}`;
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.split(' ')[1];
-        const session = db.sessions.find(s => s.token === token);
-        if (session) {
-          currentUserId = session.userId;
-          const u = db.users.find(usr => usr.id === session.userId);
-          if (u) isPremium = Boolean(u.isPremium);
-        }
+      // Identity is ALWAYS taken from the authenticated session. Client-provided
+      // name/wallet/user objects are display hints only and are never authoritative.
+      const session = getAuthSession(req);
+      if (!session) {
+        return res.status(401).json({ error: 'Для Battle потрібен реальний авторизований користувач.' });
       }
+      const currentUser = db.users.find(usr => usr.id === session.userId);
+      if (!currentUser || currentUser.isBanned) {
+        return res.status(403).json({ error: 'Користувача не знайдено або доступ до Battle заборонено.' });
+      }
+      const isPremium = Boolean(currentUser.isPremium);
+      const currentUserId = currentUser.id;
+      const athleteDisplayName = currentUser.displayName || currentUser.username;
+      const athleteAvatar = currentUser.avatar;
+      const currentWallet = currentUser.walletAddress || currentUser.id;
 
-      // Check if another competitor is waiting in this queue
-      const existing = matchmakingQueue.get(fighterKey);
-      if (existing && existing.athleteWallet !== athleteWallet && (now - existing.joinedAt < 25000)) {
-        matchmakingQueue.delete(fighterKey);
-        const battleId = `battle_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+      const sessionNonce = `NONCE-BATTLE-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+      activeNonces.set(sessionNonce, {
+        nonce: sessionNonce,
+        athleteWallet: currentWallet,
+        createdAt: Date.now(),
+        challenge: 'Статична фіксація 3с (PvP Calibration)',
+        used: false
+      });
 
-        // Create Active Battle Session in EXERCISE_SELECTION state
+      // 1. Explicit AI Battle Mode requested
+      if (normalizedMode === 'ai') {
+        const battleId = `battle_ai_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
         const newSession: BattleRoomSession = {
           battleId,
           roomCode: normalizedRoom,
           createdAt: now,
           updatedAt: now,
           status: 'EXERCISE_SELECTION',
-          selectionTimeoutAt: now + 35000, // 35 second selection window
+          isAiBattle: true,
+          selectionTimeoutAt: now + 35000,
           confirmedExerciseId: null,
+          battleStartTime: null,
+          battleEndTime: null,
+          sessionNonce,
           p1: {
-            userId: existing.athleteWallet,
-            name: existing.athleteName,
-            wallet: existing.athleteWallet,
-            avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop&crop=faces',
-            badge: 'Fighter',
-            isPremium: false,
-            selectedExerciseId: exercise || 'pushups_classic',
-            isReady: false,
-            lastPing: now
-          },
-          p2: {
             userId: currentUserId,
-            name: athleteName || 'Атлет Кузні',
-            wallet: athleteWallet || currentUserId,
-            avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces',
-            badge: 'Athlete',
+            name: athleteDisplayName,
+            wallet: currentWallet,
+            avatar: athleteAvatar,
+            badge: 'Challenger',
             isPremium,
             selectedExerciseId: exercise || 'pushups_classic',
             isReady: false,
-            lastPing: now
+            calibrationPassed: false,
+            lastPing: now,
+            verifiedReps: 0,
+            rejectedReps: 0
+          },
+          p2: {
+            userId: 'ai_forge_simulator',
+            name: 'Forge AI Trainer (Neural Coach)',
+            wallet: 'AI-SIMULATOR',
+            avatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=160&h=160&fit=crop',
+            badge: 'AI Coach',
+            isPremium: false,
+            selectedExerciseId: exercise || 'pushups_classic',
+            isReady: false,
+            calibrationPassed: true,
+            lastPing: now,
+            verifiedReps: 0,
+            rejectedReps: 0
+          }
+        };
+
+        activeBattleRooms.set(battleId, newSession);
+        return res.json({
+          status: 'matched',
+          battleId,
+          roomState: 'EXERCISE_SELECTION',
+          roomCode: normalizedRoom,
+          isAiBattle: true,
+          sessionNonce,
+          opponent: {
+            name: newSession.p2.name,
+            wallet: newSession.p2.wallet,
+            avatar: newSession.p2.avatar,
+            badge: newSession.p2.badge,
+            isAi: true
+          }
+        });
+      }
+
+      // 2. Real PvP Matchmaking Queue
+      const existing = matchmakingQueue.get(fighterKey);
+      if (existing && existing.userId === currentUserId) {
+        return res.json({ status: 'waiting', roomCode: normalizedRoom, message: 'Ви вже очікуєте суперника.' });
+      }
+      if (existing && existing.userId !== currentUserId && existing.exercise === exercise && (now - existing.joinedAt < 25000)) {
+        matchmakingQueue.delete(fighterKey);
+        const battleId = `battle_pvp_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+
+        const newSession: BattleRoomSession = {
+          battleId,
+          roomCode: normalizedRoom,
+          createdAt: now,
+          updatedAt: now,
+          status: 'EXERCISE_SELECTION',
+          isAiBattle: false,
+          selectionTimeoutAt: now + 35000,
+          confirmedExerciseId: null,
+          battleStartTime: null,
+          battleEndTime: null,
+          sessionNonce,
+          p1: {
+            userId: existing.userId,
+            name: existing.athleteName,
+            wallet: existing.athleteWallet,
+            avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop&crop=faces',
+            badge: 'Fighter P1',
+            isPremium: false,
+            selectedExerciseId: exercise || 'pushups_classic',
+            isReady: false,
+            calibrationPassed: false,
+            lastPing: now,
+            verifiedReps: 0,
+            rejectedReps: 0
+          },
+          p2: {
+            userId: currentUserId,
+            name: athleteDisplayName,
+            wallet: currentWallet,
+            avatar: athleteAvatar,
+            badge: 'Fighter P2',
+            isPremium,
+            selectedExerciseId: exercise || 'pushups_classic',
+            isReady: false,
+            calibrationPassed: false,
+            lastPing: now,
+            verifiedReps: 0,
+            rejectedReps: 0
           }
         };
 
@@ -2140,75 +2287,53 @@ async function startServer() {
           status: 'matched',
           battleId,
           roomState: 'EXERCISE_SELECTION',
+          roomCode: normalizedRoom,
+          isAiBattle: false,
+          sessionNonce,
           opponent: {
+            userId: existing.userId,
             name: existing.athleteName,
             wallet: existing.athleteWallet,
-            avatar: newSession.p1.avatar
+            avatar: newSession.p1.avatar,
+            badge: newSession.p1.badge,
+            isAi: false
           }
         });
       }
 
-      // If matching with official Benchmark rival or creating private room
-      const battleId = `battle_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
-      const newSession: BattleRoomSession = {
-        battleId,
+      // No rival in queue yet: place fighter in waiting queue (real PvP, never fabricate mock users)
+      matchmakingQueue.set(fighterKey, {
+        id: `wait_${Date.now()}`,
+        exercise,
+        athleteName: athleteDisplayName,
+        athleteWallet: currentWallet,
+        userId: currentUserId,
         roomCode: normalizedRoom,
-        createdAt: now,
-        updatedAt: now,
-        status: 'EXERCISE_SELECTION',
-        selectionTimeoutAt: now + 35000,
-        confirmedExerciseId: null,
-        p1: {
-          userId: currentUserId,
-          name: athleteName || 'Ти (Athlete)',
-          wallet: athleteWallet || currentUserId,
-          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces',
-          badge: 'Fighter',
-          isPremium,
-          selectedExerciseId: exercise || 'pushups_classic',
-          isReady: false,
-          lastPing: now
-        },
-        p2: {
-          userId: 'FORGE-BENCHMARK-SYSTEM',
-          name: 'Норматив Кузні (Target Benchmark)',
-          wallet: 'FORGE-BENCHMARK-OFFICIAL-SYSTEM',
-          avatar: 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=160&h=160&fit=crop',
-          badge: 'Official Standard',
-          isPremium: true,
-          selectedExerciseId: exercise || 'pushups_classic',
-          isReady: false,
-          lastPing: now
-        }
-      };
+        joinedAt: now,
+        timeoutSeconds: 30
+      });
 
-      activeBattleRooms.set(battleId, newSession);
-
-      res.json({
-        status: 'matched',
-        battleId,
-        roomState: 'EXERCISE_SELECTION',
+      return res.json({
+        status: 'waiting',
         roomCode: normalizedRoom,
-        opponent: {
-          name: newSession.p2.name,
-          wallet: newSession.p2.wallet,
-          avatar: newSession.p2.avatar,
-          badge: newSession.p2.badge
-        }
+        message: 'Очікуємо суперника... Ви перші у черзі кімнати.'
       });
     } catch (err) {
-      res.status(500).json({ error: 'Matchmaking error' });
+      console.error('Matchmaking error:', err);
+      res.status(500).json({ error: 'Помилка матчмейкінгу' });
     }
   });
 
-  // GET /api/battle/room/:battleId — Synchronizes room state, choices, ready status, time left
+  // GET /api/battle/room/:battleId — Synchronizes authoritative room state
   app.get('/api/battle/room/:battleId', (req, res) => {
     const { battleId } = req.params;
-    const { userId } = req.query as { userId: string };
+    const session = getAuthSession(req);
+    if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+    const userId = session.userId;
     const room = activeBattleRooms.get(battleId);
 
     if (!room) {
-      return res.status(404).json({ error: 'Battle room not found' });
+      return res.status(404).json({ error: 'Бойову кімнату не знайдено' });
     }
 
     const now = Date.now();
@@ -2219,16 +2344,15 @@ async function startServer() {
       if (room.p2.userId === userId) room.p2.lastPing = now;
     }
 
-    // Check selection window timeout
+    // Selection timeout handling
     const secondsLeft = Math.max(0, Math.ceil((room.selectionTimeoutAt - now) / 1000));
     if (secondsLeft === 0 && room.status === 'EXERCISE_SELECTION' && !room.confirmedExerciseId) {
-      // Apply default selection (e.g. pushups_classic) if selection timed out
       room.confirmedExerciseId = room.p1.selectedExerciseId || room.p2.selectedExerciseId || 'pushups_classic';
       room.status = 'WAITING_FOR_OPPONENT';
     }
 
-    // Auto-respond for Benchmark bot if player is ready
-    if (room.p2.userId === 'FORGE-BENCHMARK-SYSTEM') {
+    // AI Simulator auto-confirm if player is ready
+    if (room.isAiBattle || room.p2.userId === 'ai_forge_simulator') {
       if (room.p1.selectedExerciseId) {
         room.p2.selectedExerciseId = room.p1.selectedExerciseId;
         room.confirmedExerciseId = room.p1.selectedExerciseId;
@@ -2239,37 +2363,63 @@ async function startServer() {
       }
     }
 
-    // Check if both ready
-    if (room.p1.isReady && room.p2.isReady && room.confirmedExerciseId) {
-      room.status = 'EXERCISE_CONFIRMED';
+    // Mutual confirmation check
+    if (room.p1.isReady && room.p2.isReady && room.p1.selectedExerciseId && room.p1.selectedExerciseId === room.p2.selectedExerciseId) {
+      room.confirmedExerciseId = room.p1.selectedExerciseId;
+      if (room.status === 'WAITING_FOR_OPPONENT' || room.status === 'EXERCISE_SELECTION') {
+        room.status = 'EXERCISE_CONFIRMED';
+      }
+    }
+
+    // 60-second battle clock check
+    let battleTimeLeft = 60;
+    if (room.battleStartTime && room.battleEndTime) {
+      battleTimeLeft = Math.max(0, Math.ceil((room.battleEndTime - now) / 1000));
+      if (battleTimeLeft === 0 && room.status === 'ACTIVE') {
+        room.status = 'VERIFYING';
+      }
     }
 
     res.json({
       battleId: room.battleId,
       roomCode: room.roomCode,
       status: room.status,
+      isAiBattle: room.isAiBattle,
       secondsLeft,
+      battleTimeLeft,
       confirmedExerciseId: room.confirmedExerciseId,
+      sessionNonce: room.sessionNonce,
       p1: {
         userId: room.p1.userId,
         name: room.p1.name,
         selectedExerciseId: room.p1.selectedExerciseId,
         isReady: room.p1.isReady,
-        isPremium: room.p1.isPremium
+        calibrationPassed: room.p1.calibrationPassed,
+        isPremium: room.p1.isPremium,
+        verifiedReps: room.p1.verifiedReps,
+        rejectedReps: room.p1.rejectedReps
       },
       p2: {
         userId: room.p2.userId,
         name: room.p2.name,
         selectedExerciseId: room.p2.selectedExerciseId,
         isReady: room.p2.isReady,
-        isPremium: room.p2.isPremium
-      }
+        calibrationPassed: room.p2.calibrationPassed,
+        isPremium: room.p2.isPremium,
+        verifiedReps: room.p2.verifiedReps,
+        rejectedReps: room.p2.rejectedReps
+      },
+      verifiedResult: room.verifiedResult || null,
+      solanaSettlement: room.solanaSettlement || null
     });
   });
 
   // POST /api/battle/select-exercise — Server-authoritative exercise proposal & compatibility check
   app.post('/api/battle/select-exercise', (req, res) => {
-    const { battleId, userId, exerciseId } = req.body;
+    const { battleId, exerciseId } = req.body;
+    const session = getAuthSession(req);
+    if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+    const userId = session.userId;
     const room = activeBattleRooms.get(battleId);
 
     if (!room) {
@@ -2283,14 +2433,9 @@ async function startServer() {
 
     // Server-side Premium verification check
     let userIsPremium = false;
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split(' ')[1];
-      const session = db.sessions.find(s => s.token === token);
-      if (session) {
-        const u = db.users.find(usr => usr.id === session.userId);
-        if (u) userIsPremium = Boolean(u.isPremium);
-      }
+    if (session) {
+      const u = db.users.find(usr => usr.id === session.userId);
+      if (u) userIsPremium = Boolean(u.isPremium);
     }
 
     if (exMeta.premium && !userIsPremium) {
@@ -2300,35 +2445,30 @@ async function startServer() {
       });
     }
 
-    // Assign choice to player
+    // Assign candidate to player
     if (room.p1.userId === userId) {
       room.p1.selectedExerciseId = exerciseId;
-      room.p1.isReady = false; // Reset ready when changing exercise
+      room.p1.isReady = false;
     } else if (room.p2.userId === userId) {
       room.p2.selectedExerciseId = exerciseId;
       room.p2.isReady = false;
     } else {
-      // Default to p1 if unassigned
-      room.p1.selectedExerciseId = exerciseId;
-      room.p1.isReady = false;
+      return res.status(403).json({ error: 'Ви не є учасником цього бою.' });
     }
 
-    // Server compatibility resolution algorithm:
-    // If both players have selected an exercise:
-    // - If both selected the SAME exercise -> confirmed
-    // - If different -> host P1's choice is selected as authoritative single exercise
+    // AI mode is intentionally isolated from real PvP.
+    if (room.isAiBattle || room.p2.userId === 'ai_forge_simulator') {
+      room.p2.selectedExerciseId = exerciseId;
+      room.confirmedExerciseId = exerciseId;
+    }
+
+    // Mutual compatibility check:
     if (room.p1.selectedExerciseId && room.p2.selectedExerciseId) {
       if (room.p1.selectedExerciseId === room.p2.selectedExerciseId) {
         room.confirmedExerciseId = room.p1.selectedExerciseId;
       } else {
-        // Deterministic host fallback
-        room.confirmedExerciseId = room.p1.selectedExerciseId;
-        room.p2.selectedExerciseId = room.p1.selectedExerciseId;
+        room.confirmedExerciseId = null;
       }
-    } else if (room.p1.selectedExerciseId) {
-      room.confirmedExerciseId = room.p1.selectedExerciseId;
-    } else if (room.p2.selectedExerciseId) {
-      room.confirmedExerciseId = room.p2.selectedExerciseId;
     }
 
     room.updatedAt = Date.now();
@@ -2344,26 +2484,29 @@ async function startServer() {
 
   // POST /api/battle/confirm-ready — Locks exercise and confirms ready status
   app.post('/api/battle/confirm-ready', (req, res) => {
-    const { battleId, userId, ready = true } = req.body;
+    const { battleId, ready = true } = req.body;
+    const session = getAuthSession(req);
+    if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+    const userId = session.userId;
     const room = activeBattleRooms.get(battleId);
 
     if (!room) {
       return res.status(404).json({ error: 'Бойову кімнату не знайдено' });
     }
 
-    if (!room.confirmedExerciseId) {
-      room.confirmedExerciseId = room.p1.selectedExerciseId || room.p2.selectedExerciseId || 'pushups_classic';
+    if (!room.p1.selectedExerciseId || !room.p2.selectedExerciseId || room.p1.selectedExerciseId !== room.p2.selectedExerciseId) {
+      return res.status(409).json({ error: 'Обидва гравці мають обрати однакову вправу.' });
     }
+    room.confirmedExerciseId = room.p1.selectedExerciseId;
 
-    if (room.p1.userId === userId || !room.p1.userId) {
+    if (room.p1.userId === userId) {
       room.p1.isReady = ready;
     } 
     if (room.p2.userId === userId) {
       room.p2.isReady = ready;
     }
 
-    // Auto-confirm for Benchmark rival
-    if (room.p2.userId === 'FORGE-BENCHMARK-SYSTEM') {
+    if (room.isAiBattle || room.p2.userId === 'ai_forge_simulator') {
       room.p2.isReady = true;
     }
 
@@ -2384,9 +2527,346 @@ async function startServer() {
     });
   });
 
+  // POST /api/battle/calibration-ready — Camera calibration confirmed
+  app.post('/api/battle/calibration-ready', (req, res) => {
+    const { battleId } = req.body;
+    const session = getAuthSession(req);
+    if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+    const userId = session.userId;
+    const room = activeBattleRooms.get(battleId);
+
+    if (!room) {
+      return res.status(404).json({ error: 'Бойову кімнату не знайдено' });
+    }
+
+    if (room.p1.userId === userId) {
+      room.p1.calibrationPassed = true;
+    }
+    if (room.p2.userId === userId) {
+      room.p2.calibrationPassed = true;
+    }
+
+    if (room.p1.calibrationPassed && room.p2.calibrationPassed) {
+      room.status = 'COUNTDOWN';
+      const now = Date.now();
+      room.battleStartTime = now + 3500;
+      room.battleEndTime = room.battleStartTime + 60000;
+    }
+
+    room.updatedAt = Date.now();
+
+    res.json({
+      success: true,
+      status: room.status,
+      battleStartTime: room.battleStartTime,
+      battleEndTime: room.battleEndTime
+    });
+  });
+
+  // POST /api/battle/start-active — Commences active 60s battle
+  app.post('/api/battle/start-active', (req, res) => {
+    const { battleId } = req.body;
+    const session = getAuthSession(req);
+    if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+    const room = activeBattleRooms.get(battleId);
+    if (room && room.p1.userId !== session.userId && room.p2.userId !== session.userId) {
+      return res.status(403).json({ error: 'Ви не є учасником цього бою.' });
+    }
+
+    if (!room) {
+      return res.status(404).json({ error: 'Бойову кімнату не знайдено' });
+    }
+
+    room.status = 'ACTIVE';
+    if (!room.battleStartTime) {
+      room.battleStartTime = Date.now();
+      room.battleEndTime = room.battleStartTime + 60000;
+    }
+    room.updatedAt = Date.now();
+
+    res.json({
+      success: true,
+      status: room.status,
+      battleStartTime: room.battleStartTime,
+      battleEndTime: room.battleEndTime
+    });
+  });
+
+  // POST /api/battle/verify-session — Server-authoritative CV frame verification & duel settlement
+  app.post('/api/battle/verify-session', (req, res) => {
+    try {
+      const { battleId, frames, sessionNonce } = req.body;
+      const room = activeBattleRooms.get(battleId);
+
+      if (!room) {
+        return res.status(404).json({ error: 'Бойову кімнату не знайдено' });
+      }
+
+      // Only an authenticated participant can submit telemetry.
+      const session = getAuthSession(req);
+      if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+      const callerUserId = session.userId;
+      if (callerUserId !== room.p1.userId && callerUserId !== room.p2.userId) {
+        return res.status(403).json({ error: 'Ви не є учасником цього бою.' });
+      }
+
+      // 1. Anti-Replay: Verify Nonce
+      const nonceObj = activeNonces.get(sessionNonce || room.sessionNonce);
+      let antiReplayNonceValid = true;
+      if (nonceObj) {
+        if (nonceObj.used || Date.now() - nonceObj.createdAt > 20 * 60 * 1000) {
+          antiReplayNonceValid = false;
+        } else {
+          const usedBy = nonceObj.usedBy || [];
+          if (usedBy.includes(callerUserId)) {
+            antiReplayNonceValid = false;
+          } else {
+            usedBy.push(callerUserId);
+            nonceObj.usedBy = usedBy;
+            nonceObj.used = usedBy.length >= 2;
+          }
+        }
+      }
+
+      // 2. Anti-Replay: Hash the raw frame journal array
+      const rawFrames: TelemetryFrame[] = Array.isArray(frames) ? frames : [];
+      const framesString = JSON.stringify(rawFrames);
+      const framesJournalHash = crypto.createHash('sha256').update(framesString).digest('hex');
+
+      let isFrameReplay = false;
+      if (rawFrames.length > 5) {
+        if (seenFrameJournalHashes.has(framesJournalHash)) {
+          isFrameReplay = true;
+          antiReplayNonceValid = false;
+        } else {
+          seenFrameJournalHashes.add(framesJournalHash);
+        }
+      }
+
+      // 3. Biomechanical Server Verification of Frames
+      const exerciseId = room.confirmedExerciseId || 'pushups_classic';
+      const verification = verifyWorkoutFrameJournal(
+        exerciseId,
+        rawFrames,
+        0, // NEVER trust client-claimed reps! Server starts from 0 and calculates authoritatively.
+        nonceObj?.challenge
+      );
+
+      const serverValidCount = verification.serverValidReps;
+      const serverRejectedCount = verification.serverRejectedReps;
+
+      // Assign verified results to caller
+      if (room.p1.userId === callerUserId || !room.p2.userId) {
+        room.p1.verifiedReps = serverValidCount;
+        room.p1.rejectedReps = serverRejectedCount;
+        room.p1.telemetryJournalHash = framesJournalHash;
+        room.p1.framesCount = verification.framesCount;
+        room.p1.verificationStatus = verification.status;
+      } else {
+        room.p2.verifiedReps = serverValidCount;
+        room.p2.rejectedReps = serverRejectedCount;
+        room.p2.telemetryJournalHash = framesJournalHash;
+        room.p2.framesCount = verification.framesCount;
+        room.p2.verificationStatus = verification.status;
+      }
+
+      // AI Simulator never participates in competitive settlement/progression.
+      if (room.isAiBattle || room.p2.userId === 'ai_forge_simulator') {
+        return res.status(403).json({ error: 'AI Simulator не має competitive settlement. Використовуйте demo-only режим.' });
+      }
+
+      // A real PvP result requires independent server verification from BOTH real players.
+      const p1Verified = room.p1.verificationStatus && room.p1.telemetryJournalHash;
+      const p2Verified = room.p2.verificationStatus && room.p2.telemetryJournalHash;
+      if (room.p1.verificationStatus === 'REJECTED_CHEAT_DETECTED' || room.p2.verificationStatus === 'REJECTED_CHEAT_DETECTED') {
+        room.status = 'VERIFICATION_FAILED';
+        return res.status(422).json({ error: 'Серверна верифікація відхилила telemetry journal.', status: 'VERIFICATION_FAILED' });
+      }
+      if (!p1Verified || !p2Verified) {
+        room.status = 'VERIFYING';
+        room.updatedAt = Date.now();
+        return res.json({
+          success: true,
+          status: 'VERIFYING',
+          verifiedResult: null,
+          waitingForOpponentVerification: true,
+          participantVerified: true
+        });
+      }
+
+      // 4. Server-Authoritative Outcome Calculation
+      const p1Reps = room.p1.verifiedReps || 0;
+      const p2Reps = room.p2.verifiedReps || 0;
+
+      let winnerId: string | 'draw' = 'draw';
+      let winnerReps = p1Reps;
+      if (p1Reps > p2Reps) {
+        winnerId = room.p1.userId;
+        winnerReps = p1Reps;
+      } else if (p2Reps > p1Reps) {
+        winnerId = room.p2.userId;
+        winnerReps = p2Reps;
+      }
+
+      // Award progression only once, after BOTH real participants are verified.
+      const xpAwarded = winnerId === 'draw' ? 60 : 100;
+      if (!room.verifiedResult) {
+        for (const participant of [room.p1, room.p2]) {
+          const user = db.users.find(u => u.id === participant.userId);
+          if (user) {
+            const won = winnerId === participant.userId;
+            user.xp = (user.xp || 0) + (winnerId === 'draw' ? 60 : won ? 100 : 30);
+            user.forgeScore = (user.forgeScore || 0) + (won ? 25 : winnerId === 'draw' ? 10 : 5);
+          }
+        }
+        saveDatabase(db);
+      }
+
+      // 5. Deterministic Cryptographic Proof Hash
+      const proofPayload = JSON.stringify({
+        battleId: room.battleId,
+        exerciseId,
+        p1: { userId: room.p1.userId, reps: p1Reps },
+        p2: { userId: room.p2.userId, reps: p2Reps },
+        winnerId,
+        winnerReps,
+        framesJournalHash,
+        antiReplayNonceValid,
+        timestamp: new Date().toISOString()
+      });
+      const proofHash = crypto.createHash('sha256').update(proofPayload).digest('hex');
+
+      // Server HMAC Signature
+      const hmac = crypto.createHmac('sha256', FORGE_VERIFIER_SECRET);
+      hmac.update(proofHash);
+      const serverSignature = hmac.digest('hex');
+
+      // 6. Update Passports for participants
+      const p1Wallet = room.p1.wallet || room.p1.userId;
+      if (p1Wallet) {
+        const passport = getOrCreatePassport(p1Wallet);
+        passport.battlesCount += 1;
+        passport.totalVerifiedReps += p1Reps;
+        if (winnerId === room.p1.userId) {
+          passport.winsCount += 1;
+        } else if (winnerId !== 'draw') {
+          passport.lossesCount += 1;
+        }
+        passport.verifiedSessionsLog.push({
+          exercise: exerciseId,
+          reps: p1Reps,
+          timestamp: Date.now(),
+          proofHash
+        });
+        passport.forgeTier = calculateForgeTier(passport.totalVerifiedReps, passport.winsCount);
+      }
+
+      room.status = 'FINISHED';
+      room.verifiedResult = {
+        battleId: room.battleId,
+        winnerId,
+        winnerReps,
+        p1VerifiedReps: p1Reps,
+        p2VerifiedReps: p2Reps,
+        p1Id: room.p1.userId,
+        p2Id: room.p2.userId,
+        exerciseId,
+        proofHash,
+        serverSignature,
+        xpAwarded,
+        finishedAt: new Date().toISOString(),
+        verificationStatus: isFrameReplay || !antiReplayNonceValid ? 'REJECTED_CHEAT_DETECTED' : 'VERIFIED_FORGE'
+      };
+
+      room.updatedAt = Date.now();
+
+      res.json({
+        success: true,
+        status: room.status,
+        verifiedResult: room.verifiedResult,
+        envelope: {
+          sessionId: `verif_battle_${Date.now()}`,
+          battleId: room.battleId,
+          exercise: exerciseId,
+          validReps: serverValidCount,
+          rejectedReps: serverRejectedCount,
+          proofHash,
+          serverSignature,
+          verifierPublicKey: VERIFIER_AUTHORITY_PUBKEY,
+          timestamp: new Date().toISOString(),
+          status: room.verifiedResult.verificationStatus
+        }
+      });
+    } catch (err: any) {
+      console.error('Battle session verification error:', err);
+      res.status(500).json({ error: 'Помилка серверної верифікації дуелі' });
+    }
+  });
+
+  // POST /api/battle/settle-blockchain — Idempotent Solana Memo Proof
+  app.post('/api/battle/settle-blockchain', async (req, res) => {
+    try {
+      const { battleId } = req.body;
+      const session = getAuthSession(req);
+      if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+      const room = activeBattleRooms.get(battleId);
+      if (room && room.p1.userId !== session.userId && room.p2.userId !== session.userId) {
+        return res.status(403).json({ error: 'Ви не є учасником цього бою.' });
+      }
+
+      if (!room || !room.verifiedResult) {
+        return res.status(400).json({ error: 'Результат батлу ще не верифіковано сервером' });
+      }
+
+      // Idempotency: Return existing settlement if already completed or in-progress
+      if (room.solanaSettlement && room.solanaSettlement.status === 'CONFIRMED') {
+        return res.json({
+          success: true,
+          settlement: room.solanaSettlement
+        });
+      }
+
+      const proofData = {
+        proofHash: room.verifiedResult.proofHash,
+        athleteWallet: room.p1.wallet,
+        exercise: room.verifiedResult.exerciseId,
+        validReps: room.verifiedResult.winnerReps,
+        durationSeconds: 60,
+        serverSignature: room.verifiedResult.serverSignature,
+        timestamp: room.verifiedResult.finishedAt
+      };
+
+      const recordResult = await solanaService.recordProof(proofData);
+
+      room.solanaSettlement = {
+        status: recordResult.status,
+        signature: recordResult.signature,
+        explorerUrl: recordResult.explorerUrl,
+        memoContent: recordResult.memoContent,
+        error: recordResult.error,
+        settledAt: new Date().toISOString()
+      };
+
+      if (recordResult.success) {
+        room.status = 'SETTLED';
+      }
+
+      res.json({
+        success: recordResult.success,
+        settlement: room.solanaSettlement
+      });
+    } catch (err: any) {
+      console.error('Solana settlement error:', err);
+      res.status(500).json({ error: 'Solana settlement execution error' });
+    }
+  });
+
   // POST /api/battle/leave-room — Notifies room of disconnect
   app.post('/api/battle/leave-room', (req, res) => {
-    const { battleId, userId } = req.body;
+    const { battleId } = req.body;
+    const session = getAuthSession(req);
+    if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+    const userId = session.userId;
     const room = activeBattleRooms.get(battleId);
     if (room) {
       room.status = 'DISCONNECTED';
@@ -2395,11 +2875,19 @@ async function startServer() {
     res.json({ success: true, status: 'DISCONNECTED' });
   });
 
+  // Legacy duel settlement is intentionally disabled. Competitive settlement is
+  // produced only by /api/battle/verify-session and /api/battle/settle-blockchain.
+  app.post('/api/battle/settle-duel', (req, res) => {
+    return res.status(410).json({
+      error: 'Legacy duel settlement disabled. Use server-authoritative Battle verification.'
+    });
+  });
+
   app.get('/api/battle/matchmake/status', (req, res) => {
     try {
       const { roomCode, exercise } = req.query as { roomCode: string; exercise: string };
       const normalizedRoom = (roomCode || 'FORGE-GLOBAL').toUpperCase();
-      const fighterKey = `${normalizedRoom}_${exercise || 'pushups'}`;
+      const fighterKey = `${normalizedRoom}_queue`;
       const entry = matchmakingQueue.get(fighterKey);
 
       if (!entry) {
@@ -2427,9 +2915,11 @@ async function startServer() {
 
   app.post('/api/battle/matchmake/cancel', (req, res) => {
     try {
-      const { roomCode, exercise } = req.body;
+      const session = getAuthSession(req);
+      if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+      const { roomCode } = req.body;
       const normalizedRoom = (roomCode || 'FORGE-GLOBAL').toUpperCase();
-      const fighterKey = `${normalizedRoom}_${exercise || 'pushups'}`;
+      const fighterKey = `${normalizedRoom}_queue`;
       matchmakingQueue.delete(fighterKey);
       res.json({ success: true, status: 'cancelled' });
     } catch (err) {
@@ -2439,14 +2929,17 @@ async function startServer() {
 
   // 5. Get Forge Passport
   app.get('/api/passport/:id', (req, res) => {
-    const passport = getOrCreatePassport(req.params.id);
+    const session = getAuthSession(req);
+    if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+    if (req.params.id !== session.userId) return res.status(403).json({ error: 'Доступ лише до власного Passport.' });
+    const passport = getOrCreatePassport(session.userId);
     res.json({ passport });
   });
 
   app.get('/api/passport', (req, res) => {
     const session = getAuthSession(req);
-    const id = session ? session.userId : '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
-    const passport = getOrCreatePassport(id);
+    if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+    const passport = getOrCreatePassport(session.userId);
     res.json({ passport });
   });
 
@@ -2464,12 +2957,35 @@ async function startServer() {
         minTime = now - 30 * 86400000;
       }
 
-      // Collect unique athlete passports
+      // Collect unique athlete passports and all registered real users
       const uniquePassports = new Map<string, ServerPassport>();
       passports.forEach(p => {
         const key = p.userId || p.walletAddress;
         if (!uniquePassports.has(key)) {
           uniquePassports.set(key, p);
+        }
+      });
+
+      // Include all registered users from database
+      db.users.forEach(u => {
+        if (!uniquePassports.has(u.id)) {
+          uniquePassports.set(u.id, {
+            userId: u.id,
+            walletAddress: u.walletAddress || u.id,
+            athleteName: u.displayName || u.username,
+            avatar: u.avatar,
+            forgeTier: calculateForgeTier(u.xp || 0, 0),
+            battlesCount: 0,
+            winsCount: 0,
+            lossesCount: 0,
+            totalVerifiedReps: u.forgeScore || 0,
+            currentStreakDays: u.streak || 1,
+            personalRecords: { pushups60s: 0, squats60s: 0, pullups60s: 0 },
+            achievements: [],
+            unlockedSkinIds: ['skin_anvil_classic'],
+            equippedSkinId: 'skin_anvil_classic',
+            verifiedSessionsLog: []
+          });
         }
       });
 
@@ -2606,8 +3122,8 @@ async function startServer() {
 
   app.get('/api/skins/catalog', (req, res) => {
     const session = getAuthSession(req);
-    const id = session ? session.userId : '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
-    const passport = getOrCreatePassport(id);
+    const userId = session ? session.userId : (req.query.userId as string) || 'guest';
+    const passport = getOrCreatePassport(userId);
     res.json({
       skins: ATHLETE_SKINS,
       unlockedSkinIds: passport.unlockedSkinIds || ['skin_anvil_classic'],
@@ -2617,18 +3133,39 @@ async function startServer() {
 
   app.post('/api/skins/unlock', (req, res) => {
     try {
+      const session = getAuthSession(req);
+      const userId = session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: 'Необхідно авторизуватися для розблокування спорядження' });
+      }
+
       const { skinId } = req.body;
       const skin = ATHLETE_SKINS.find(s => s.id === skinId);
       if (!skin) return res.status(404).json({ error: 'Скін не знайдено' });
 
-      const session = getAuthSession(req);
-      const id = session ? session.userId : '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
-      const passport = getOrCreatePassport(id);
+      const passport = getOrCreatePassport(userId);
+      if (!passport.unlockedSkinIds) passport.unlockedSkinIds = ['skin_anvil_classic'];
 
-      if (!passport.unlockedSkinIds.includes(skinId)) {
-        passport.unlockedSkinIds.push(skinId);
+      if (passport.unlockedSkinIds.includes(skinId)) {
+        return res.json({ success: true, unlockedSkinIds: passport.unlockedSkinIds, skin, alreadyUnlocked: true });
       }
-      res.json({ success: true, unlockedSkinIds: passport.unlockedSkinIds, skin });
+
+      const user = db.users.find(u => u.id === userId);
+      if (skin.costXp > 0) {
+        const currentXp = user?.xp || 0;
+        if (currentXp < skin.costXp) {
+          return res.status(400).json({ 
+            error: `Недостатньо досвіду. Потрібно ${skin.costXp} XP (у вас ${currentXp} XP). Виконуйте тренування для здобуття XP.` 
+          });
+        }
+        if (user) {
+          user.xp -= skin.costXp;
+          saveDatabase(db);
+        }
+      }
+
+      passport.unlockedSkinIds.push(skinId);
+      res.json({ success: true, unlockedSkinIds: passport.unlockedSkinIds, skin, remainingXp: user?.xp });
     } catch (err) {
       res.status(500).json({ error: 'Помилка розблокування скіна' });
     }
@@ -2636,15 +3173,18 @@ async function startServer() {
 
   app.post('/api/skins/equip', (req, res) => {
     try {
+      const session = getAuthSession(req);
+      const userId = session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: 'Необхідно авторизуватися для зміни спорядження' });
+      }
+
       const { skinId } = req.body;
       const skin = ATHLETE_SKINS.find(s => s.id === skinId);
       if (!skin) return res.status(404).json({ error: 'Скін не знайдено' });
 
-      const session = getAuthSession(req);
-      const id = session ? session.userId : '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
-      const passport = getOrCreatePassport(id);
-
-      if (!passport.unlockedSkinIds.includes(skinId)) {
+      const passport = getOrCreatePassport(userId);
+      if (!passport.unlockedSkinIds?.includes(skinId)) {
         return res.status(403).json({ error: 'Спочатку необхідно розблокувати цей скін' });
       }
 
@@ -2674,15 +3214,19 @@ async function startServer() {
 
   app.post('/api/challenges/invite', (req, res) => {
     try {
-      const { exercise, creatorReps, creatorName, athleteWallet, proofHash } = req.body;
+      const { exercise } = req.body;
+      const session = getAuthSession(req);
+      if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+      const creator = db.users.find(u => u.id === session.userId);
+      if (!creator) return res.status(404).json({ error: 'Користувача не знайдено.' });
       const code = generateBase58String(8).toUpperCase();
       const record: ChallengeInviteRecord = {
         code,
-        creatorWallet: athleteWallet || '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
-        creatorName: creatorName || 'Кузнець Forge',
-        exercise: exercise || 'pushups',
-        creatorReps: Number(creatorReps) || 25,
-        proofHash: proofHash || undefined,
+        creatorWallet: creator.walletAddress || creator.id,
+        creatorName: creator.displayName || creator.username,
+        exercise: exercise || 'pushups_classic',
+        creatorReps: 0,
+        proofHash: undefined,
         createdAt: Date.now(),
         expiresAt: Date.now() + 7 * 86400000
       };
@@ -2708,13 +3252,16 @@ async function startServer() {
 
   app.post('/api/challenges/invite/:code/accept', (req, res) => {
     const { code } = req.params;
-    const { athleteName } = req.body;
+    const session = getAuthSession(req);
+    if (!session) return res.status(401).json({ error: 'Потрібна авторизація.' });
+    const user = db.users.find(u => u.id === session.userId);
+    if (!user) return res.status(404).json({ error: 'Користувача не знайдено.' });
     const invite = challengeInvites.get(code.toUpperCase());
     if (!invite) {
       return res.status(404).json({ error: 'Челендж не знайдено' });
     }
     invite.acceptedBy = {
-      athleteName: athleteName || 'Суперник',
+      athleteName: user.displayName || user.username,
       acceptedAt: Date.now()
     };
     res.json({ success: true, invite });
@@ -3090,7 +3637,15 @@ meal (назва), calories (число), protein (число в грамах), 
       return res.json({ success: true, isPremium: true, message: 'Оплата вже підтверджена' });
     }
 
-    // Server verification pass: confirm payment authenticity
+    // This endpoint is only a return/lookup endpoint. Without a configured payment
+    // provider webhook, a browser redirect is NOT proof of payment.
+    return res.status(409).json({
+      error: 'Платіжний провайдер не налаштований: checkout return не може підтвердити оплату без webhook/provider verification.',
+      status: payment.status,
+      isPremium: false
+    });
+
+    /* unreachable until a real provider verification is implemented
     payment.status = 'paid';
     payment.receiptUrl = `https://forgemuscle.app/receipts/${payment.transactionId}.pdf`;
 
@@ -3132,6 +3687,7 @@ meal (назва), calories (число), protein (число в грамах), 
 
     saveDatabase(db);
     res.json({ success: true, isPremium: true, subscription: newSub });
+    */
   });
 
   // 5. POST /api/billing/create-bank-transfer — Generates formal IBAN invoice with unique reference code
@@ -3218,6 +3774,11 @@ meal (назва), calories (число), protein (число в грамах), 
 
   // 7. POST /api/billing/verify-bank-transfer — Admin / Verification operator confirmation of bank receipt
   app.post('/api/billing/verify-bank-transfer', (req, res) => {
+    const adminSession = getAuthSession(req);
+    const adminUser = adminSession ? db.users.find(u => u.id === adminSession.userId) : null;
+    if (!adminUser || adminUser.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'Потрібні права адміністратора.' });
+    }
     const { transferId, referenceCode, status = 'confirmed' } = req.body;
     const transfer = db.bankTransfers.find(t => 
       (transferId && t.id === transferId) || 

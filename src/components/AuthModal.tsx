@@ -20,6 +20,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [resetToken, setResetToken] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -43,21 +44,43 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleGoogleAuth = async () => {
     setError(null);
     setSuccessInfo(null);
-    setIsSubmitting(true);
     sound.playClick();
 
+    const googleApi = typeof window !== 'undefined' ? (window as any).google?.accounts?.id : null;
+    const clientId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID;
+    if (!googleApi || !clientId) {
+      setError('Google OAuth не налаштований. Додайте VITE_GOOGLE_CLIENT_ID та Google Identity Services.');
+      return;
+    }
+
+    setIsSubmitting(true);
     try {
-      const res = await authStore.signInWithGoogle({
-        email: 'vrbkirill09@gmail.com',
-        name: 'Kirill Vrb',
-        picture: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces'
+      googleApi.initialize({
+        client_id: clientId,
+        callback: async (response: { credential?: string }) => {
+          try {
+            if (!response?.credential) throw new Error('Google не повернув ID token.');
+            const result = await authStore.signInWithGoogle({ credential: response.credential });
+            setIsSubmitting(false);
+            onClose();
+            onSuccess(result.isNewUser);
+          } catch (err: any) {
+            setIsSubmitting(false);
+            setError(err?.message || 'Не вдалося виконати вхід через Google.');
+          }
+        },
+        auto_select: false,
+        cancel_on_tap_outside: true
       });
-      setIsSubmitting(false);
-      onClose();
-      onSuccess(res.isNewUser);
+      googleApi.prompt((notification: any) => {
+        if (notification?.isNotDisplayed?.() || notification?.isSkippedMoment?.()) {
+          setIsSubmitting(false);
+          setError('Google не відкрив вибір акаунта. Спробуйте ще раз або використайте Email + Пароль.');
+        }
+      });
     } catch (err: any) {
       setIsSubmitting(false);
-      setError("We couldn't sign you in. Please try again.");
+      setError(err?.message || 'Не вдалося підключитися до Google Identity Services.');
     }
   };
 
@@ -67,33 +90,49 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     setError(null);
     setSuccessInfo(null);
-    setIsSubmitting(true);
     sound.playClick();
 
     try {
       if (mode === 'login') {
+        setIsSubmitting(true);
         const res = await authStore.login(email, password);
         setFailedAttempts(0);
         setIsSubmitting(false);
         onClose();
         onSuccess(res.isNewUser);
       } else if (mode === 'register') {
-        const res = await authStore.register(email, username, password, displayName);
+        // Strict client-side validation
+        if (password.length < 8) {
+          setError('Пароль повинен містити щонайменше 8 символів.');
+          return;
+        }
+        if (password !== confirmPassword) {
+          setError('Введені паролі не збігаються.');
+          return;
+        }
+        const cleanUsername = username.trim().replace(/^@/, '');
+        if (cleanUsername.length < 3) {
+          setError('Username повинен містити не менше 3 символів.');
+          return;
+        }
+
+        setIsSubmitting(true);
+        const res = await authStore.register(email, cleanUsername, password, displayName, confirmPassword);
         setFailedAttempts(0);
         setIsSubmitting(false);
         onClose();
         onSuccess(res.isNewUser);
       } else if (mode === 'forgot') {
+        setIsSubmitting(true);
         const data = await authStore.forgotPassword(email);
         setIsSubmitting(false);
-        if (data.resetToken) {
-          setResetToken(data.resetToken);
-          setMode('reset');
-          setSuccessInfo('Токен відновлення згенеровано. Введіть новий пароль.');
-        } else {
-          setSuccessInfo(data.message || 'Інструкції надіслано на вашу пошту.');
-        }
+        setSuccessInfo(data.message || 'Якщо акаунт існує, інструкції для скидання пароля буде надіслано на пошту.');
       } else if (mode === 'reset') {
+        if (newPassword.length < 8) {
+          setError('Новий пароль повинен містити щонайменше 8 символів.');
+          return;
+        }
+        setIsSubmitting(true);
         await authStore.resetPassword(resetToken, newPassword);
         setFailedAttempts(0);
         setIsSubmitting(false);
@@ -440,13 +479,32 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <input
                   type="password"
                   required
+                  minLength={mode === 'register' ? 8 : 1}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder={mode === 'register' ? 'Мінімум 8 символів' : '••••••••'}
                   className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-9 pr-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
             </div>
+
+            {mode === 'register' && (
+              <div>
+                <label className="block text-xs font-medium text-neutral-300 mb-1">Підтвердження пароля</label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-neutral-500 absolute left-3 top-3" />
+                  <input
+                    type="password"
+                    required
+                    minLength={8}
+                    value={confirmPassword}
+                    onChange={e => setConfirmPassword(e.target.value)}
+                    placeholder="Повторіть пароль"
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-9 pr-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+            )}
 
             <button
               type="submit"

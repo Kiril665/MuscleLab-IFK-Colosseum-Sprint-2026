@@ -254,8 +254,8 @@ export function useCameraVerifier(options: UseCameraVerifierOptions = {}): UseCa
     analyticsTracker.track('camera_started', { exerciseId });
 
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setCameraStatus('simulation');
-      startRenderLoop(true);
+      setCameraStatus('error');
+      setErrorMessage('Камера недоступна. Для верифікації потрібен реальний відеопотік.');
       return;
     }
 
@@ -263,10 +263,8 @@ export function useCameraVerifier(options: UseCameraVerifierOptions = {}): UseCa
       // First, try loading MediaPipe Pose
       const modelReady = await poseService.initMediaPipe();
       if (!modelReady) {
-        console.warn('MediaPipe model offline or CDN unreachable, activating simulated biomechanical verifier');
-        setCameraStatus('simulation');
-        setErrorMessage('AI-модель зору недоступна (офлайн). Активовано AI-симулятор з реальними формулами верифікації.');
-        startRenderLoop(true);
+        setCameraStatus('error');
+        setErrorMessage('AI-модель зору недоступна. Для реальної верифікації повторіть спробу.');
         return;
       }
 
@@ -324,11 +322,11 @@ export function useCameraVerifier(options: UseCameraVerifierOptions = {}): UseCa
       analyticsTracker.track('camera_success', { exerciseId });
       startRenderLoop(false);
     } catch (err: any) {
-      console.warn('Camera initiation failed, activating simulated verifier:', err);
-      setCameraStatus('simulation');
-      setErrorMessage('Камера недоступна (або доступ відхилено). Активовано AI-симулятор з реальними формулами верифікації.');
+      console.warn('Camera initiation failed:', err);
+      setCameraStatus('error');
+      setErrorMessage(err?.message || 'Камера недоступна або доступ відхилено.');
       analyticsTracker.track('camera_failure', { exerciseId, error: err?.message });
-      startRenderLoop(true);
+      stopCamera();
     }
   }, [exerciseId, stopCamera, startRenderLoop]);
 

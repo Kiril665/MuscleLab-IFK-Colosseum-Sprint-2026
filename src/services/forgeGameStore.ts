@@ -112,9 +112,9 @@ export const ACTIVE_SPONSOR_CHALLENGE: SponsorChallenge = {
 };
 
 class ForgeGameStore {
-  private walletAddress: string = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
+  private walletAddress: string = '';
   private passport: ForgePassportData = {
-    walletAddress: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
+    walletAddress: '',
     battlesCount: 0,
     winsCount: 0,
     lossesCount: 0,
@@ -244,7 +244,7 @@ class ForgeGameStore {
       repDetails: params.repDetails,
       frames: params.frames || [],
       athleteWallet: this.walletAddress,
-      athleteName: params.athleteName || 'Кузнець Forge'
+      athleteName: params.athleteName || undefined
     };
 
     try {
@@ -270,46 +270,8 @@ class ForgeGameStore {
       console.warn('Backend verifier endpoint fallback:', err);
     }
 
-    // Client-side deterministic cryptographic fallback
-    const envelope: VerificationProofEnvelope = {
-      sessionId: `verif_client_${Date.now()}`,
-      sessionNonce: payload.nonce,
-      athleteWallet: this.walletAddress,
-      athleteName: payload.athleteName,
-      exercise: params.exercise,
-      durationSeconds: params.durationSeconds,
-      validReps: params.validReps,
-      rejectedReps: params.rejectedReps,
-      rejectionReasons: params.rejectionReasons,
-      repDetails: params.repDetails,
-      livenessPassed: true,
-      antiReplayNonceValid: true,
-      anomalyScore: 0,
-      proofHash: `sha256_${Date.now()}_${params.validReps}`,
-      serverSignature: `ed25519_sig_${Date.now()}`,
-      verifierPublicKey: 'ForgeVerifier111111111111111111111111111111',
-      timestamp: new Date().toISOString(),
-      solanaTxSignature: null,
-      solanaExplorerUrl: null,
-      status: 'VERIFIED_LOCAL'
-    };
-
-    this.lastVerificationEnvelope = envelope;
-    this.passport.totalVerifiedReps += params.validReps;
-
-    // Update PRs
-    if (params.exercise === 'pushups' && params.validReps > this.passport.personalRecords.pushups60s) {
-      this.passport.personalRecords.pushups60s = params.validReps;
-    } else if (params.exercise === 'squats' && params.validReps > this.passport.personalRecords.squats60s) {
-      this.passport.personalRecords.squats60s = params.validReps;
-    } else if (params.exercise === 'pullups' && params.validReps > this.passport.personalRecords.pullups60s) {
-      this.passport.personalRecords.pullups60s = params.validReps;
-    }
-
-    // Re-check progression tier
-    this.updateProgressionTier();
-    this.notify();
-    return envelope;
+    // Never fabricate a verified proof when the authoritative server is unavailable.
+    throw new Error('Серверна верифікація недоступна. Локальний результат не може бути VERIFIED.');
   }
 
   // Settle Battle Duel on Solana
@@ -342,11 +304,11 @@ class ForgeGameStore {
 
     const data = await this.settleDuel(payload as any);
     return {
-      winnerId: data?.winnerId || params.winnerId,
-      winnerReps: data?.winnerReps ?? (params.winnerId === params.player1.id ? payload.player1.validReps : payload.player2.validReps),
-      solanaTxSignature: data?.solanaTx?.signature || '',
-      solanaExplorerUrl: data?.solanaTx?.explorerUrl || '',
-      proofHash: data?.proofHash || ''
+      winnerId: params.winnerId,
+      winnerReps: params.winnerId === params.player1.id ? payload.player1.validReps : payload.player2.validReps,
+      solanaTxSignature: data?.solanaTx?.signature || null,
+      solanaExplorerUrl: data?.solanaTx?.explorerUrl || null,
+      proofHash: data?.proofHash || null
     };
   }
 
@@ -358,12 +320,9 @@ class ForgeGameStore {
     winnerId: string | 'draw';
   }) {
     try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      const savedToken = localStorage.getItem('forgemuscle_auth_token');
-      if (savedToken) headers['Authorization'] = `Bearer ${savedToken}`;
       const res = await fetch('/api/battle/settle-duel', {
         method: 'POST',
-        headers,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params)
       });
       if (res.ok) {
@@ -381,8 +340,8 @@ class ForgeGameStore {
             earnedAt: new Date().toISOString(),
             badgeIcon: '👑',
             category: 'battle',
-            solanaTxSignature: data.settlement.solanaTx?.signature || null,
-            solanaExplorerUrl: data.settlement.solanaTx?.explorerUrl || null,
+            solanaTxSignature: null,
+            solanaExplorerUrl: null,
             proofHash: data.settlement.proofHash
           });
         } else if (params.winnerId !== 'draw') {
@@ -397,32 +356,7 @@ class ForgeGameStore {
       // Fallback
     }
 
-    // Offline fallback settlement
-    const settlement = {
-      battleId: params.battleId,
-      exercise: params.exercise,
-      winnerId: params.winnerId,
-      winnerReps: params.winnerId === params.player1.id ? params.player1.validReps : params.player2.validReps,
-      proofHash: '',
-      solanaTx: {
-        signature: null,
-        status: 'not_recorded',
-        timestamp: new Date().toISOString(),
-        proofHash: '',
-        explorerUrl: null,
-        error: 'Battle server is unavailable; Solana proof was not recorded.'
-      },
-      status: 'VERIFIED_LOCAL'
-    };
-
-    this.passport.battlesCount += 1;
-    this.passport.totalVerifiedReps += params.player1.validReps;
-    if (params.winnerId === params.player1.id) {
-      this.passport.winsCount += 1;
-    }
-    this.updateProgressionTier();
-    this.notify();
-    return settlement;
+    throw new Error('Не вдалося отримати server-authoritative settlement. Локальний settlement заборонений.');
   }
 
   async fetchBattleExercises(): Promise<any[]> {

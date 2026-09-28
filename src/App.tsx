@@ -36,7 +36,7 @@ import { OnboardingFlow } from './components/OnboardingFlow';
 import { Flame, Dumbbell, Shield } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('battle');
+  const [activeTab, setActiveTab] = useState<string>('home');
   const [userDiscipline, setUserDiscipline] = useState<Discipline | null>(null);
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [forgedPrograms, setForgedPrograms] = useState<ForgedProgram[]>([]);
@@ -80,35 +80,32 @@ export default function App() {
     }
   }, []);
 
-  // Load persisted state from localStorage
+  // Load only user-scoped non-authoritative UI/workout drafts after authentication.
   useEffect(() => {
-    try {
-      const savedDiscipline = localStorage.getItem('forgemuscle_discipline');
-      if (savedDiscipline) {
-        setUserDiscipline(savedDiscipline as Discipline);
-      }
-
-      const savedSessions = localStorage.getItem('forgemuscle_sessions');
-      if (savedSessions) {
-        setSessions(JSON.parse(savedSessions));
-      } else {
-        setSessions([]);
-      }
-
-      const savedPrograms = localStorage.getItem('forgemuscle_programs');
-      if (savedPrograms) {
-        setForgedPrograms(JSON.parse(savedPrograms));
-      }
-    } catch {
-      // ignore
+    if (!currentUser?.id) {
+      setSessions([]);
+      setForgedPrograms([]);
+      return;
     }
-  }, []);
+    try {
+      const prefix = `forgemuscle:${currentUser.id}:`;
+      const savedDiscipline = localStorage.getItem(`${prefix}discipline`);
+      setUserDiscipline(savedDiscipline ? savedDiscipline as Discipline : null);
+      const savedSessions = localStorage.getItem(`${prefix}sessions`);
+      setSessions(savedSessions ? JSON.parse(savedSessions) : []);
+      const savedPrograms = localStorage.getItem(`${prefix}programs`);
+      setForgedPrograms(savedPrograms ? JSON.parse(savedPrograms) : []);
+    } catch {
+      setSessions([]);
+      setForgedPrograms([]);
+    }
+  }, [currentUser?.id]);
 
   // Save sessions when updated
   const saveSessions = (newSessions: WorkoutSession[]) => {
     setSessions(newSessions);
     try {
-      localStorage.setItem('forgemuscle_sessions', JSON.stringify(newSessions));
+      if (currentUser?.id) localStorage.setItem(`forgemuscle:${currentUser.id}:sessions`, JSON.stringify(newSessions));
     } catch {
       // ignore
     }
@@ -117,7 +114,7 @@ export default function App() {
   const handleSelectDiscipline = (disc: Discipline) => {
     setUserDiscipline(disc);
     try {
-      localStorage.setItem('forgemuscle_discipline', disc);
+      if (currentUser?.id) localStorage.setItem(`forgemuscle:${currentUser.id}:discipline`, disc);
     } catch {
       // ignore
     }
@@ -147,7 +144,7 @@ export default function App() {
     const updated = [prog, ...forgedPrograms];
     setForgedPrograms(updated);
     try {
-      localStorage.setItem('forgemuscle_programs', JSON.stringify(updated));
+      if (currentUser?.id) localStorage.setItem(`forgemuscle:${currentUser.id}:programs`, JSON.stringify(updated));
     } catch {
       // ignore
     }
