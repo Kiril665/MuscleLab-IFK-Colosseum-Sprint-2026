@@ -4,509 +4,248 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Header } from './components/Header';
-import { HomeOnboarding } from './components/HomeOnboarding';
-import { ExerciseDatabase } from './components/ExerciseDatabase';
-import { ProgramForge } from './components/ProgramForge';
-import { CameraTracker } from './components/CameraTracker';
-import { ProgressJournal } from './components/ProgressJournal';
-import { BattleMode } from './components/BattleMode';
-import { ForgeBattleArena } from './components/ForgeBattleArena';
-import { ForgePassportView } from './components/ForgePassportView';
-import { ProHub } from './components/ProHub';
-import { NutritionPlanner } from './components/NutritionPlanner';
-import { ForgeCommunity } from './components/ForgeCommunity';
-import { ForgeEducation } from './components/ForgeEducation';
-import { ForgeProfileQuests } from './components/ForgeProfileQuests';
-import { ForgeJourneyEngine } from './components/ForgeJourneyEngine';
-import { ForgeMarketplaceStore } from './components/ForgeMarketplaceStore';
-import { SmartSearchModal } from './components/SmartSearchModal';
-import { HelpCenterView } from './components/HelpCenterView';
-import { Leaderboard } from './components/Leaderboard';
-import { ForgeWardrobe } from './components/ForgeWardrobe';
-import { ChallengeInviteLanding } from './components/ChallengeInviteLanding';
-import { AccountSettings } from './components/AccountSettings';
-import { HelpArticle } from './data/helpArticles';
-import { Discipline, AnvilStage, WorkoutSession, ForgedProgram, Exercise } from './types';
-import { EXERCISES } from './data/exercisesData';
-import { sound } from './services/soundEngine';
+import { NavBar, NavTabId } from './components/navigation/NavBar';
+import { HomeView } from './components/home/HomeView';
+import { BattleView } from './components/battle/BattleView';
+import { ChatVoiceView } from './components/chat/ChatVoiceView';
+import { LeaderboardView } from './components/leaderboard/LeaderboardView';
+import { ProfileView } from './components/profile/ProfileView';
+import { LocaleBanner } from './components/common/LocaleBanner';
+import { SettingsModal } from './components/settings/SettingsModal';
+import { OnboardingTour } from './components/onboarding/OnboardingTour';
 import { authStore } from './services/authStore';
-import { AuthModal } from './components/AuthModal';
-import { OnboardingFlow } from './components/OnboardingFlow';
-import { Flame, Dumbbell, Shield } from 'lucide-react';
+import { forgeGameStore } from './services/forgeGameStore';
+import { battleStore } from './services/battleStore';
+import { onboardingStore } from './services/onboardingStore';
+import { useI18n } from './services/i18n';
+import { ExerciseId } from './types';
+import { Swords, Settings as SettingsIcon, WifiOff } from 'lucide-react';
+import { AuthScreen } from './components/auth/AuthScreen';
+import { Avatar } from './ui/Avatar';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('battle');
-  const [userDiscipline, setUserDiscipline] = useState<Discipline | null>(null);
-  const [sessions, setSessions] = useState<WorkoutSession[]>([]);
-  const [forgedPrograms, setForgedPrograms] = useState<ForgedProgram[]>([]);
-  const [currentExercise, setCurrentExercise] = useState<Exercise | null>(null);
-  const [selectedHelpArticle, setSelectedHelpArticle] = useState<HelpArticle | null>(null);
-  const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
-  const [challengeInviteCode, setChallengeInviteCode] = useState<string | null>(null);
-  const [isWardrobeOpen, setIsWardrobeOpen] = useState<boolean>(false);
-  const [isInviteModalOpen, setIsInviteModalOpen] = useState<boolean>(false);
-
-  // Authentication & Onboarding state
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(authStore.isAuthenticated());
-  const [currentUser, setCurrentUser] = useState(authStore.getCurrentUser());
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(!authStore.isAuthenticated());
-  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('register');
-  const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
+  const { t } = useI18n();
+  const [activeTab, setActiveTab] = useState<NavTabId>('home');
+  const [user, setUser] = useState(authStore.getUser());
+  const [isAuthenticated, setIsAuthenticated] = useState(authStore.getIsAuthenticated());
+  const [isCheckingSession, setIsCheckingSession] = useState(authStore.getIsCheckingSession());
+  const [level, setLevel] = useState(forgeGameStore.getLevel());
+  const [selectedBattleExercise, setSelectedBattleExercise] = useState<ExerciseId>('pushups');
+  const [challengeInviteText, setChallengeInviteText] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
 
   useEffect(() => {
-    const unsubscribe = authStore.subscribe(() => {
-      const authed = authStore.isAuthenticated();
-      const user = authStore.getCurrentUser();
-      setIsAuthenticated(authed);
-      setCurrentUser(user);
-      if (!authed) {
-        setIsAuthModalOpen(true);
+    // Check if user came from a challenge link
+    const params = new URLSearchParams(window.location.search);
+    const challengeParam = params.get('challenge');
+    if (challengeParam) {
+      setChallengeInviteText(t.battle.challengeBanner);
+      setActiveTab('battle');
+    }
+
+    // Register tab changer with onboarding store
+    onboardingStore.registerTabChanger((tab) => setActiveTab(tab));
+
+    const unsubAuth = authStore.subscribe(() => {
+      const u = authStore.getUser();
+      setUser(u);
+      setIsAuthenticated(authStore.getIsAuthenticated());
+      setIsCheckingSession(authStore.getIsCheckingSession());
+
+      // Trigger onboarding for new registered athletes
+      if (authStore.getIsAuthenticated() && !u.onboardingCompleted) {
+        onboardingStore.startTour();
       }
     });
-    return unsubscribe;
-  }, []);
 
-  // Detect invite link in URL
-  useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const challengeParam = params.get('challenge');
-      if (challengeParam) {
-        setChallengeInviteCode(challengeParam);
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
+    const unsubGame = forgeGameStore.subscribe(() => {
+      setLevel(forgeGameStore.getLevel());
+    });
 
-  // Load persisted state from localStorage
-  useEffect(() => {
-    try {
-      const savedDiscipline = localStorage.getItem('forgemuscle_discipline');
-      if (savedDiscipline) {
-        setUserDiscipline(savedDiscipline as Discipline);
-      }
+    // Offline / Online listeners
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
 
-      const savedSessions = localStorage.getItem('forgemuscle_sessions');
-      if (savedSessions) {
-        setSessions(JSON.parse(savedSessions));
-      } else {
-        setSessions([]);
-      }
-
-      const savedPrograms = localStorage.getItem('forgemuscle_programs');
-      if (savedPrograms) {
-        setForgedPrograms(JSON.parse(savedPrograms));
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  // Save sessions when updated
-  const saveSessions = (newSessions: WorkoutSession[]) => {
-    setSessions(newSessions);
-    try {
-      localStorage.setItem('forgemuscle_sessions', JSON.stringify(newSessions));
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleSelectDiscipline = (disc: Discipline) => {
-    setUserDiscipline(disc);
-    try {
-      localStorage.setItem('forgemuscle_discipline', disc);
-    } catch {
-      // ignore
-    }
-  };
-
-  // Compute total XP
-  const totalXp = sessions.reduce((acc, curr) => acc + curr.totalXp, 0);
-
-  // Determine anvil evolution stage
-  const getCurrentStage = (xp: number): AnvilStage => {
-    if (xp >= 1500) return 'fiery_aura';
-    if (xp >= 700) return 'heavy_armor';
-    if (xp >= 250) return 'tempered_steel';
-    return 'raw_metal';
-  };
-
-  const currentStage = getCurrentStage(totalXp);
-
-  // Handle completed session from Camera Tracker or Manual
-  const handleWorkoutComplete = (session: WorkoutSession) => {
-    const updated = [session, ...sessions];
-    saveSessions(updated);
-  };
-
-  // Handle saving forged routine
-  const handleSaveProgram = (prog: ForgedProgram) => {
-    const updated = [prog, ...forgedPrograms];
-    setForgedPrograms(updated);
-    try {
-      localStorage.setItem('forgemuscle_programs', JSON.stringify(updated));
-    } catch {
-      // ignore
-    }
-  };
-
-  // Start exercise in camera tracker
-  const handleStartExercise = (exercise: Exercise) => {
-    setCurrentExercise(exercise);
-    setActiveTab('camera');
-  };
-
-  // Clear history
-  const handleClearHistory = () => {
-    saveSessions([]);
-  };
-
-  // Tug of war XP boost
-  const handleContributeBattleXp = (team: 'bodybuilding' | 'calisthenics', amount: number) => {
-    // Artificial mini session for record
-    const battleSession: WorkoutSession = {
-      id: `battle_${Date.now()}`,
-      date: new Date().toISOString(),
-      exerciseName: `Внесок у битву (${team === 'bodybuilding' ? 'Бодибілдинг' : 'Калістеніка'})`,
-      muscleGroup: 'back',
-      discipline: team,
-      reps: 5,
-      totalXp: amount,
-      durationSeconds: 15
+    return () => {
+      unsubAuth();
+      unsubGame();
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
-    handleWorkoutComplete(battleSession);
+  }, [t]);
+
+  const handleNavigateToBattle = (exerciseId?: ExerciseId) => {
+    if (exerciseId) {
+      setSelectedBattleExercise(exerciseId);
+      battleStore.selectExercise(exerciseId);
+    }
+    setActiveTab('battle');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const handleChallengePlayer = (_nick: string) => {
+    setActiveTab('battle');
+    battleStore.startCalibration();
+  };
+
+  const handleOpenChatWithPlayer = (_nick: string) => {
+    setActiveTab('chat');
+  };
+
+  // 1. Initial boot session loading state (logo spinner only, zero flash of login screen)
+  if (isCheckingSession) {
+    return (
+      <div className="min-h-screen bg-[#0B0D11] text-white flex flex-col items-center justify-center p-4 selection:bg-[var(--accent)] selection:text-white">
+        <div className="w-16 h-16 rounded-2xl bg-[#13171F] border border-[#283244] p-1.5 shadow-2xl flex items-center justify-center mb-4 animate-pulse">
+          <img src="/logo.png" alt="ForgeMuscle" className="w-full h-full object-contain" />
+        </div>
+        <div className="font-heading font-black text-2xl tracking-tight text-white mb-2">
+          FORGE<span className="text-[var(--accent)]">MUSCLE</span>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-slate-400">
+          <div className="w-4 h-4 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+          <span>{t.auth.checkingSession}</span>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Unauthenticated gate: full-screen AuthScreen
+  if (!isAuthenticated) {
+    return (
+      <AuthScreen
+        onAuthenticated={() => {
+          setIsAuthenticated(true);
+          const u = authStore.getUser();
+          if (!u.onboardingCompleted) {
+            onboardingStore.startTour();
+          }
+        }}
+      />
+    );
+  }
+
+  // 3. Authenticated athlete: main ForgeMuscle platform
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col selection:bg-amber-500 selection:text-neutral-950 font-sans">
-      {/* Persistent Navigation Header with Web Audio Engine Controls */}
-      <Header
+    <div className="min-h-screen bg-[var(--bg-base)] text-[var(--text-primary)] flex flex-col md:flex-row">
+      {/* Navigation: Desktop Sidebar & Mobile Bottom Bar */}
+      <NavBar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        totalXp={totalXp}
-        currentStage={currentStage}
-        userDiscipline={userDiscipline}
-        onSelectDiscipline={handleSelectDiscipline}
-        onOpenSearch={() => setIsSearchOpen(true)}
+        onTabChange={(tab) => setActiveTab(tab)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
-      {/* Main App Screens */}
-      <main className="flex-1 pb-16">
-        {activeTab === 'home' && (
-          <HomeOnboarding
-            onSelectDiscipline={handleSelectDiscipline}
-            selectedDiscipline={userDiscipline}
-            onNavigate={(tab) => {
-              sound.playClick();
-              setActiveTab(tab);
-            }}
-          />
+      {/* Main Content Area */}
+      <main className="flex-1 md:pl-64 flex flex-col min-h-screen">
+        {/* Offline notification banner */}
+        {!isOnline && (
+          <div className="bg-amber-500/90 text-black px-4 py-2 text-xs font-bold flex items-center justify-center gap-2 shadow-md">
+            <WifiOff size={16} />
+            <span>{t.offline.title}: {t.offline.desc}</span>
+          </div>
         )}
 
-        {/* Point 1: Forge Journey */}
-        {activeTab === 'journey' && (
-          <ForgeJourneyEngine
-            onStartExercise={handleStartExercise}
-            onNavigate={(tab) => {
-              sound.playClick();
-              setActiveTab(tab);
-            }}
-            userDiscipline={userDiscipline}
-            onSelectDiscipline={handleSelectDiscipline}
-          />
+        {/* Auto Locale Notification Banner */}
+        <LocaleBanner />
+
+        {/* Mobile Header */}
+        <header className="md:hidden sticky top-0 z-30 bg-[var(--bg-card)]/95 backdrop-blur-md border-b border-[var(--border-subtle)] px-4 py-2.5 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-[#0B0D11] border border-[var(--border-subtle)] overflow-hidden shrink-0 flex items-center justify-center p-0.5 shadow-sm">
+              <img
+                src="/logo.png"
+                alt="ForgeMuscle"
+                className="w-full h-full object-contain"
+              />
+            </div>
+            <span className="font-heading font-black text-base text-[var(--text-primary)] tracking-tight">
+              FORGE<span className="text-[var(--accent)]">MUSCLE</span>
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              id="mobile-header-settings"
+              onClick={() => setIsSettingsOpen(true)}
+              aria-label={t.settings.title}
+              className="p-1.5 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
+            >
+              <SettingsIcon size={16} />
+            </button>
+
+            <div
+              onClick={() => setActiveTab('profile')}
+              className="flex items-center gap-1.5 bg-[var(--bg-subtle)] px-2.5 py-1 rounded-full border border-[var(--border-subtle)] text-xs font-semibold cursor-pointer"
+            >
+              <Avatar avatar={user.avatar} size="sm" />
+              <span className="text-[var(--accent)] font-heading font-bold">LVL {level}</span>
+            </div>
+          </div>
+        </header>
+
+        {/* Challenge Link Banner if opened via invite */}
+        {challengeInviteText && (
+          <div className="bg-[var(--accent)] text-white px-4 py-2 text-xs font-bold flex items-center justify-between shadow-md">
+            <div className="flex items-center gap-2">
+              <Swords size={16} />
+              <span>{challengeInviteText}</span>
+            </div>
+            <button
+              onClick={() => setChallengeInviteText(null)}
+              className="text-[11px] font-black underline cursor-pointer ml-3"
+            >
+              {t.battle.challengeGotIt}
+            </button>
+          </div>
         )}
 
-        {activeTab === 'exercises' && (
-          <ExerciseDatabase
-            onStartExercise={handleStartExercise}
-          />
-        )}
+        {/* View Routing */}
+        <div className="flex-1 w-full">
+          {activeTab === 'home' && (
+            <HomeView
+              onNavigateToBattle={handleNavigateToBattle}
+              onNavigateToProfile={() => setActiveTab('profile')}
+            />
+          )}
 
-        {activeTab === 'forge' && (
-          <ProgramForge
-            userDiscipline={userDiscipline}
-            onSaveProgram={handleSaveProgram}
-            onStartExercise={handleStartExercise}
-          />
-        )}
+          {activeTab === 'battle' && (
+            <BattleView
+              initialExerciseId={selectedBattleExercise}
+              onNavigateToLeaderboard={() => setActiveTab('leaderboard')}
+              onNavigateToHome={() => setActiveTab('home')}
+            />
+          )}
 
-        {activeTab === 'camera' && (
-          <CameraTracker
-            currentExercise={currentExercise || EXERCISES[0]}
-            onSelectExercise={setCurrentExercise}
-            onWorkoutComplete={handleWorkoutComplete}
-            userDiscipline={userDiscipline}
-            onBack={() => {
-              sound.playClick();
-              setActiveTab('exercises');
-            }}
-          />
-        )}
+          {activeTab === 'chat' && (
+            <ChatVoiceView
+              onChallengePlayer={handleChallengePlayer}
+            />
+          )}
 
-        {activeTab === 'nutrition' && (
-          <NutritionPlanner
-            userDiscipline={userDiscipline}
-          />
-        )}
+          {activeTab === 'leaderboard' && (
+            <LeaderboardView
+              onChallengePlayer={handleChallengePlayer}
+              onOpenChatWithPlayer={handleOpenChatWithPlayer}
+            />
+          )}
 
-        {activeTab === 'journal' && (
-          <ProgressJournal
-            sessions={sessions}
-            totalXp={totalXp}
-            currentStage={currentStage}
-            onAddManualSession={handleWorkoutComplete}
-            onClearHistory={handleClearHistory}
-            userDiscipline={userDiscipline}
-          />
-        )}
-
-        {activeTab === 'battle' && (
-          <ForgeBattleArena
-            onBackToPassport={() => setActiveTab('passport')}
-            onNavigateToSoloVerifier={() => setActiveTab('camera')}
-          />
-        )}
-
-        {activeTab === 'passport' && (
-          <ForgePassportView
-            onStartBattle={() => setActiveTab('battle')}
-            onStartVerification={() => setActiveTab('camera')}
-          />
-        )}
-
-        {(activeTab === 'leaderboards' || activeTab === 'leaderboard') && (
-          <Leaderboard
-            onOpenInviteModal={() => setIsInviteModalOpen(true)}
-            onOpenWardrobeModal={() => setIsWardrobeOpen(true)}
-          />
-        )}
-
-        {activeTab === 'community' && (
-          <ForgeCommunity
-            initialTab="feed"
-            onEarnXp={(amount) => handleContributeBattleXp(userDiscipline || 'hybrid', amount)}
-          />
-        )}
-
-        {activeTab === 'chat' && (
-          <ForgeCommunity
-            initialTab="chat"
-            onEarnXp={(amount) => handleContributeBattleXp(userDiscipline || 'hybrid', amount)}
-          />
-        )}
-
-        {activeTab === 'guilds' && (
-          <ForgeCommunity
-            initialTab="guilds"
-            onEarnXp={(amount) => handleContributeBattleXp(userDiscipline || 'hybrid', amount)}
-          />
-        )}
-
-        {activeTab === 'education' && (
-          <ForgeEducation
-            onEarnXp={(amount) => handleContributeBattleXp(userDiscipline || 'hybrid', amount)}
-          />
-        )}
-
-        {activeTab === 'wiki' && (
-          <ForgeEducation
-            initialTab="wiki"
-            onEarnXp={(amount) => handleContributeBattleXp(userDiscipline || 'hybrid', amount)}
-          />
-        )}
-
-        {activeTab === 'academy' && (
-          <ForgeEducation
-            initialTab="academy"
-            onEarnXp={(amount) => handleContributeBattleXp(userDiscipline || 'hybrid', amount)}
-          />
-        )}
-
-        {activeTab === 'profile_quests' && (
-          <ForgeProfileQuests
-            onEarnXp={(amount) => handleContributeBattleXp(userDiscipline || 'hybrid', amount)}
-            onNavigateToWorkout={() => setActiveTab('camera')}
-          />
-        )}
-
-        {activeTab === 'challenges' && (
-          <ForgeProfileQuests
-            initialTab="quests"
-            onEarnXp={(amount) => handleContributeBattleXp(userDiscipline || 'hybrid', amount)}
-            onNavigateToWorkout={() => setActiveTab('camera')}
-          />
-        )}
-
-        {activeTab === 'profile' && (
-          <ForgeProfileQuests
-            initialTab="score"
-            onEarnXp={(amount) => handleContributeBattleXp(userDiscipline || 'hybrid', amount)}
-            onNavigateToWorkout={() => setActiveTab('camera')}
-          />
-        )}
-
-        {(activeTab === 'market' || activeTab === 'marketplace') && (
-          <ForgeMarketplaceStore
-            initialTab="programs"
-            onPurchaseComplete={(item) => {
-              sound.playAnvilHit();
-            }}
-          />
-        )}
-
-        {activeTab === 'premium' && (
-          <ForgeMarketplaceStore
-            initialTab="premium"
-            onPurchaseComplete={(item) => {
-              sound.playAnvilHit();
-            }}
-          />
-        )}
-
-        {activeTab === 'prohub' && (
-          <ProHub />
-        )}
-
-        {(activeTab === 'settings' || activeTab === 'account_settings') && (
-          <AccountSettings
-            onNavigateHome={() => setActiveTab('battle')}
-            onNavigateToProfile={() => setActiveTab('profile_quests')}
-          />
-        )}
-
-        {activeTab === 'help' && (
-          <HelpCenterView
-            initialArticle={selectedHelpArticle}
-            onNavigateToCamera={() => setActiveTab('camera')}
-            onNavigateToBattle={() => setActiveTab('battle')}
-            onNavigateToPassport={() => setActiveTab('passport')}
-            onBack={() => setActiveTab('battle')}
-          />
-        )}
+          {activeTab === 'profile' && (
+            <ProfileView />
+          )}
+        </div>
       </main>
 
-      {/* Global Smart Search Modal (Point 58) */}
-      <SmartSearchModal
-        isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
-        onNavigate={(tab, itemData) => {
-          sound.playClick();
-          if (tab === 'exercises' && itemData?.metadata?.exerciseId) {
-            const found = EXERCISES.find(e => e.id === itemData.metadata.exerciseId);
-            if (found) {
-              setCurrentExercise(found);
-            }
-          } else if (tab === 'help' && itemData) {
-            setSelectedHelpArticle(itemData);
-          }
-          setActiveTab(tab);
-        }}
+      {/* Global Modals: Settings & Interactive Onboarding Tour */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onRestartOnboarding={() => onboardingStore.startTour()}
       />
 
-      {/* Wardrobe Modal */}
-      {isWardrobeOpen && (
-        <ForgeWardrobe
-          onClose={() => setIsWardrobeOpen(false)}
-          userXp={totalXp}
-        />
-      )}
-
-      {/* Challenge Invite Modal */}
-      {(isInviteModalOpen || challengeInviteCode) && (
-        <ChallengeInviteLanding
-          inviteCode={challengeInviteCode}
-          onClose={() => {
-            setIsInviteModalOpen(false);
-            setChallengeInviteCode(null);
-          }}
-          onStartDuel={(exerciseName, targetReps, opponentName) => {
-            setIsInviteModalOpen(false);
-            setChallengeInviteCode(null);
-            setActiveTab('battle');
-          }}
-        />
-      )}
-
-      {/* Auth Modal */}
-      <AuthModal
-        isOpen={!isAuthenticated || isAuthModalOpen}
-        initialMode={authModalMode}
-        onClose={() => {
-          if (isAuthenticated) {
-            setIsAuthModalOpen(false);
-          }
-        }}
-        onSuccess={(isNew) => {
-          setIsAuthModalOpen(false);
-          setIsAuthenticated(true);
-          const user = authStore.getCurrentUser();
-          setCurrentUser(user);
-          if (isNew || (user && !user.hasCompletedOnboarding)) {
-            setShowOnboarding(true);
-          }
-        }}
-      />
-
-      {/* Onboarding Flow Modal for New Users */}
-      {showOnboarding && currentUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
-          <div className="w-full max-w-xl bg-neutral-900 border border-neutral-800 rounded-3xl p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
-            <OnboardingFlow
-              initialUsername={currentUser.username}
-              initialDiscipline={userDiscipline}
-              onComplete={() => {
-                setShowOnboarding(false);
-                if (currentUser) {
-                  currentUser.hasCompletedOnboarding = true;
-                  authStore.updateProfile({ hasCompletedOnboarding: true }).catch(() => {});
-                }
-              }}
-              onStartPushupTest={() => {
-                setShowOnboarding(false);
-                if (currentUser) {
-                  currentUser.hasCompletedOnboarding = true;
-                  authStore.updateProfile({ hasCompletedOnboarding: true }).catch(() => {});
-                }
-                setActiveTab('camera');
-              }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Atmospheric Footer */}
-      <footer className="border-t border-neutral-800/80 bg-neutral-950/90 py-8 text-neutral-400 text-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <span className="font-epic font-bold text-amber-400 text-sm tracking-wider">FORGEMUSCLE</span>
-            <span>—</span>
-            <span>Кузня Бодибілдингу та Калістеніки</span>
-          </div>
-
-          <div className="flex items-center gap-6 text-neutral-400">
-            <button
-              onClick={() => {
-                sound.playAnvilHit();
-              }}
-              className="hover:text-amber-400 cursor-pointer transition-colors"
-            >
-              Звук молота
-            </button>
-            <button
-              onClick={() => {
-                sound.playCoachWhistle();
-              }}
-              className="hover:text-amber-400 cursor-pointer transition-colors"
-            >
-              Свисток Арно
-            </button>
-            <span>Web Audio API Procedural Synthesis</span>
-          </div>
-        </div>
-      </footer>
+      <OnboardingTour />
     </div>
   );
 }

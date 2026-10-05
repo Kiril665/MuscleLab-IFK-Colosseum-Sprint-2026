@@ -1,0 +1,4 @@
+import React,{useState} from 'react';
+export type AvatarSize='sm'|'md'|'lg'|'xl';
+const sizes:Record<AvatarSize,string>={sm:'w-8 h-8 text-base',md:'w-10 h-10 text-xl',lg:'w-16 h-16 text-3xl',xl:'w-24 h-24 text-5xl'};
+export const Avatar:React.FC<{avatar?:string;size?:AvatarSize;alt?:string;className?:string}>=({avatar='⚡',size='md',alt='Avatar',className=''})=>{const [failed,setFailed]=useState(false);const isImage=/^(https?:\/\/|\/uploads\/|data:image\/)/i.test(avatar);return <div className={`${sizes[size]} rounded-full overflow-hidden bg-[var(--bg-subtle)] border border-[var(--border-subtle)] flex items-center justify-center shrink-0 ${className}`}>{isImage&&!failed?<img src={avatar} alt={alt} loading='lazy' className='w-full h-full object-cover' onError={()=>setFailed(true)}/>:<span>{avatar||'⚡'}</span>}</div>};

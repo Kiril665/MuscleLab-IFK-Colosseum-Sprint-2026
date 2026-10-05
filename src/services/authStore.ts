@@ -1,23 +1,39 @@
-import { ForgeUser, UserSessionInfo, OnboardingData, CloudProgressSyncPayload } from '../types';
-import { sound } from './soundEngine';
+import { User, UserSettings } from '../types';
+import { detectBrowserLocale } from '../config/locales';
 
-type AuthListener = () => void;
+export function getLocalizedGuestNick(locale: string): string {
+  return locale === 'en' ? 'Athlete' : locale === 'pl' ? 'Atleta' : locale === 'de' ? 'Athlet' : locale === 'fr' ? 'Athlète' : locale === 'es' ? 'Atleta' : 'Атлет';
+}
+
+const DEFAULT_SETTINGS: UserSettings = {
+  language: detectBrowserLocale(),
+  theme: 'dark',
+  soundEnabled: true,
+  hapticEnabled: true,
+  notificationsEnabled: true,
+  privacy: 'public'
+};
+
+const DEFAULT_GUEST: User = {
+  id: 'usr_guest',
+  nick: getLocalizedGuestNick(DEFAULT_SETTINGS.language),
+  avatar: '⚡',
+  createdAt: Date.now(),
+  settings: DEFAULT_SETTINGS
+};
 
 class AuthStore {
-  private currentUser: ForgeUser | null = null;
-  private token: string | null = null;
-  private isLoading = true;
-  private syncStatus: 'synced' | 'syncing' | 'offline' | 'error' = 'synced';
-  private lastSyncedTime: string | null = null;
-  private activeSessions: UserSessionInfo[] = [];
-  private listeners: Set<AuthListener> = new Set();
-  private syncTimer: any = null;
+  private user: User = { ...DEFAULT_GUEST };
+  private isAuthenticated: boolean = false;
+  private isCheckingSession: boolean = true;
+  private listeners: Set<() => void> = new Set();
+  public autoLocaleDismissed: boolean = false;
 
   constructor() {
-    this.initFromStorage();
+    this.checkSession();
   }
 
-  public subscribe(listener: AuthListener) {
+  public subscribe(listener: () => void) {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
@@ -25,488 +41,220 @@ class AuthStore {
   }
 
   private notify() {
-    this.listeners.forEach(fn => fn());
+    this.listeners.forEach((fn) => fn());
   }
 
-  private async initFromStorage() {
+  public getUser(): User {
+    return this.user;
+  }
+
+  public getIsAuthenticated(): boolean {
+    return this.isAuthenticated;
+  }
+
+  public getIsCheckingSession(): boolean {
+    return this.isCheckingSession;
+  }
+
+  public async checkSession(): Promise<boolean> {
     try {
-      const savedToken = localStorage.getItem('forgemuscle_auth_token');
-      const cachedUser = localStorage.getItem('forgemuscle_user_cache');
-
-      if (cachedUser) {
-        this.currentUser = JSON.parse(cachedUser);
-      }
-      if (savedToken) {
-        this.token = savedToken;
-        // Verify with server
-        await this.fetchMe();
-      } else {
-        this.isLoading = false;
-        this.notify();
-      }
-    } catch {
-      this.isLoading = false;
-      this.syncStatus = 'offline';
-      this.notify();
-    }
-  }
-
-  public getCurrentUser(): ForgeUser | null {
-    return this.currentUser;
-  }
-
-  public isAuthenticated(): boolean {
-    return !!this.currentUser && !!this.token;
-  }
-
-  public getIsLoading(): boolean {
-    return this.isLoading;
-  }
-
-  public getSyncStatus(): 'synced' | 'syncing' | 'offline' | 'error' {
-    return this.syncStatus;
-  }
-
-  public getLastSyncedTime(): string | null {
-    return this.lastSyncedTime;
-  }
-
-  public getActiveSessions(): UserSessionInfo[] {
-    return this.activeSessions;
-  }
-
-  public getToken(): string | null {
-    return this.token;
-  }
-
-  public getAuthHeaders(): Record<string, string> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
-    };
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
-    }
-    return headers;
-  }
-
-  public async fetchMe(): Promise<ForgeUser | null> {
-    if (!this.token) {
-      this.isLoading = false;
-      this.notify();
-      return null;
-    }
-
-    try {
-      const res = await fetch('/api/auth/me', {
-        headers: this.getAuthHeaders()
-      });
+      const res = await fetch('/api/auth/me');
       if (res.ok) {
         const data = await res.json();
-        this.currentUser = data.user;
-        this.syncStatus = 'synced';
-        this.lastSyncedTime = new Date().toLocaleTimeString();
-        localStorage.setItem('forgemuscle_user_cache', JSON.stringify(data.user));
-      } else if (res.status === 401) {
-        this.token = null;
-        this.currentUser = null;
-        localStorage.removeItem('forgemuscle_auth_token');
-        localStorage.removeItem('forgemuscle_user_cache');
+        if (data.authenticated && data.user) {
+          const s = data.user.settings || {};
+          this.user = {
+            id: data.user.id,
+            nick: data.user.nick,
+            email: data.user.email,
+            isGuest: Boolean(data.user.isGuest),
+            avatar: data.user.avatar || '⚡',
+            createdAt: data.user.createdAt || data.user.created_at || Date.now(),
+            onboardingCompleted: Boolean(data.user.onboardingCompleted),
+            settings: {
+              language: s.language || data.user.locale || detectBrowserLocale(),
+              theme: s.theme || data.user.theme || 'dark',
+              soundEnabled: s.soundEnabled !== undefined ? Boolean(s.soundEnabled) : true,
+              hapticEnabled: s.hapticEnabled !== undefined ? Boolean(s.hapticEnabled) : true,
+              notificationsEnabled: true,
+              privacy: s.privacy || 'public',
+              micEnabled: s.micEnabled !== undefined ? Boolean(s.micEnabled) : true,
+              selectedMicId: s.selectedMicId || '',
+              cameraEnabled: s.cameraEnabled !== undefined ? Boolean(s.cameraEnabled) : true,
+              selectedCameraId: s.selectedCameraId || '',
+              facingMode: s.facingMode || 'user',
+              showSkeleton: s.showSkeleton !== undefined ? Boolean(s.showSkeleton) : true,
+              mirrorVideo: s.mirrorVideo !== undefined ? Boolean(s.mirrorVideo) : true,
+              pushToTalk: Boolean(s.pushToTalk)
+            }
+          };
+          this.isAuthenticated = true;
+          this.isCheckingSession = false;
+          this.applyTheme(this.user.settings.theme);
+          this.notify();
+          return true;
+        }
       }
-    } catch (err) {
-      this.syncStatus = 'offline';
-    } finally {
-      this.isLoading = false;
-      this.notify();
-    }
-    return this.currentUser;
+    } catch {}
+
+    this.isAuthenticated = false;
+    this.isCheckingSession = false;
+    this.user = { ...DEFAULT_GUEST };
+    this.applyTheme(this.user.settings.theme);
+    this.notify();
+    return false;
   }
 
-  // Google OAuth / Continue with Google (#62, #81, #87)
-  public async signInWithGoogle(customDetails?: { email?: string; name?: string; picture?: string }): Promise<{ isNewUser: boolean; user: ForgeUser }> {
-    this.isLoading = true;
-    this.notify();
-
-    try {
-      // Default to realistic athlete profile or provided details
-      const payload = {
-        email: customDetails?.email || 'vrbkirill09@gmail.com',
-        name: customDetails?.name || 'Kirill Vrb',
-        picture: customDetails?.picture || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop&crop=faces',
-        googleId: `google_${Date.now()}`
-      };
-
-      const res = await fetch('/api/auth/google', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "We couldn't sign you in. Please try again.");
-      }
-
-      const data = await res.json();
-      this.token = data.token;
-      this.currentUser = data.user;
-      localStorage.setItem('forgemuscle_auth_token', data.token);
-      localStorage.setItem('forgemuscle_user_cache', JSON.stringify(data.user));
-      this.syncStatus = 'synced';
-      this.lastSyncedTime = new Date().toLocaleTimeString();
-      this.isLoading = false;
-      this.notify();
-
-      sound.playLevelUp();
-      return { isNewUser: data.isNewUser, user: data.user };
-    } catch (err: any) {
-      this.isLoading = false;
-      this.notify();
-      throw err;
-    }
-  }
-
-  // Local Login
-  public async login(identifier: string, password: string): Promise<{ isNewUser: boolean; user: ForgeUser }> {
-    this.isLoading = true;
-    this.notify();
-
+  public async loginWithEmail(identifier: string, pass: string): Promise<{ success: boolean; error?: string }> {
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier, password })
+        body: JSON.stringify({ identifier, password: pass })
       });
-
-      if (!res.ok) {
-        const errData = await res.json();
-        const error: any = new Error(errData.error || "Невірний логін або пароль.");
-        if (errData.requiresPasswordReset) {
-          error.requiresPasswordReset = true;
-          error.email = errData.email;
-          error.resetToken = errData.resetToken;
-        }
-        throw error;
-      }
-
       const data = await res.json();
-      this.token = data.token;
-      this.currentUser = data.user;
-      localStorage.setItem('forgemuscle_auth_token', data.token);
-      localStorage.setItem('forgemuscle_user_cache', JSON.stringify(data.user));
-      this.syncStatus = 'synced';
-      this.lastSyncedTime = new Date().toLocaleTimeString();
-      this.isLoading = false;
-      this.notify();
-
-      sound.playLevelUp();
-      return { isNewUser: data.isNewUser, user: data.user };
-    } catch (err: any) {
-      this.isLoading = false;
-      this.notify();
-      throw err;
-    }
-  }
-
-  // Request password reset token
-  public async forgotPassword(email: string): Promise<{ success: boolean; message: string; resetToken?: string }> {
-    const res = await fetch('/api/auth/forgot-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email })
-    });
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Помилка при відновленні пароля.');
-    }
-
-    return await res.json();
-  }
-
-  // Set new password with one-time reset token
-  public async resetPassword(token: string, newPassword: string): Promise<{ success: boolean; user: ForgeUser }> {
-    this.isLoading = true;
-    this.notify();
-
-    try {
-      const res = await fetch('/api/auth/reset-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, newPassword })
-      });
-
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Не вдалося скинути пароль.');
+        return { success: false, error: data.error || 'Помилка авторизації' };
       }
-
-      const data = await res.json();
-      this.token = data.token;
-      this.currentUser = data.user;
-      localStorage.setItem('forgemuscle_auth_token', data.token);
-      localStorage.setItem('forgemuscle_user_cache', JSON.stringify(data.user));
-      this.syncStatus = 'synced';
-      this.lastSyncedTime = new Date().toLocaleTimeString();
-      this.isLoading = false;
-      this.notify();
-
-      sound.playLevelUp();
-      return { success: true, user: data.user };
-    } catch (err: any) {
-      this.isLoading = false;
-      this.notify();
-      throw err;
+      await this.checkSession();
+      try { const { socketClient } = await import('./socketClient'); socketClient.disconnect(); socketClient.connect(); } catch {}
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: 'Помилка з’єднання з сервером' };
     }
   }
 
-  // Change password for currently authenticated user
-  public async changePassword(currentPassword: string, newPassword: string): Promise<boolean> {
-    const res = await fetch('/api/auth/change-password', {
-      method: 'POST',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify({ currentPassword, newPassword })
-    });
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Помилка зміни пароля.');
-    }
-
-    return true;
-  }
-
-  // Change email for currently authenticated user
-  public async changeEmail(newEmail: string, currentPassword: string): Promise<ForgeUser> {
-    const res = await fetch('/api/user/email', {
-      method: 'POST',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify({ newEmail, currentPassword })
-    });
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Помилка зміни електронної пошти.');
-    }
-
-    const data = await res.json();
-    this.currentUser = data.user;
-    localStorage.setItem('forgemuscle_user_cache', JSON.stringify(data.user));
-    this.notify();
-    return data.user;
-  }
-
-  // Local Register
-  public async register(email: string, username: string, password: string, displayName?: string): Promise<{ isNewUser: boolean; user: ForgeUser }> {
-    this.isLoading = true;
-    this.notify();
-
+  public async registerWithEmail(opts: {
+    email: string;
+    password: string;
+    nick: string;
+    avatar?: string;
+  }): Promise<{ success: boolean; error?: string }> {
     try {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, username, password, displayName })
+        body: JSON.stringify({
+          ...opts,
+          locale: this.user.settings.language,
+          unitSystem: 'metric'
+        })
       });
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Помилка при створенні акаунта.");
-      }
-
       const data = await res.json();
-      this.token = data.token;
-      this.currentUser = data.user;
-      localStorage.setItem('forgemuscle_auth_token', data.token);
-      localStorage.setItem('forgemuscle_user_cache', JSON.stringify(data.user));
-      this.syncStatus = 'synced';
-      this.lastSyncedTime = new Date().toLocaleTimeString();
-      this.isLoading = false;
-      this.notify();
-
-      sound.playLevelUp();
-      return { isNewUser: true, user: data.user };
-    } catch (err: any) {
-      this.isLoading = false;
-      this.notify();
-      throw err;
-    }
-  }
-
-  // Complete Onboarding (#64) -> CREATE MY FORGE
-  public async completeOnboarding(data: OnboardingData): Promise<ForgeUser> {
-    try {
-      const res = await fetch('/api/auth/onboarding', {
-        method: 'POST',
-        headers: this.getAuthHeaders(),
-        body: JSON.stringify(data)
-      });
-
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Не вдалося зберегти дані онбордингу.");
+        return { success: false, error: data.error || 'Помилка реєстрації' };
       }
-
-      const resData = await res.json();
-      this.currentUser = resData.user;
-      localStorage.setItem('forgemuscle_user_cache', JSON.stringify(resData.user));
-      this.notify();
-
-      sound.playAnvilHit();
-      return resData.user;
-    } catch (err: any) {
-      throw err;
-    }
-  }
-
-  // Update Profile & Settings (#70)
-  public async updateProfile(updates: Partial<ForgeUser>): Promise<ForgeUser> {
-    try {
-      const res = await fetch('/api/user/profile', {
-        method: 'PUT',
-        headers: this.getAuthHeaders(),
-        body: JSON.stringify(updates)
-      });
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Не вдалося оновити налаштування.");
-      }
-
-      const resData = await res.json();
-      this.currentUser = resData.user;
-      localStorage.setItem('forgemuscle_user_cache', JSON.stringify(resData.user));
-      this.notify();
-      return resData.user;
-    } catch (err: any) {
-      throw err;
-    }
-  }
-
-  // Active Sessions (#73)
-  public async fetchActiveSessions(): Promise<UserSessionInfo[]> {
-    try {
-      const res = await fetch('/api/auth/sessions', {
-        headers: this.getAuthHeaders()
-      });
-      if (res.ok) {
-        const data = await res.json();
-        this.activeSessions = data.sessions || [];
-        this.notify();
-        return this.activeSessions;
-      }
+      await this.checkSession();
+      try { const { socketClient } = await import('./socketClient'); socketClient.disconnect(); socketClient.connect(); } catch {}
+      return { success: true };
     } catch {
-      // offline
-    }
-    return [];
-  }
-
-  // Revoke session
-  public async revokeSession(sessionId: string): Promise<void> {
-    try {
-      await fetch('/api/auth/sessions/revoke', {
-        method: 'POST',
-        headers: this.getAuthHeaders(),
-        body: JSON.stringify({ sessionId })
-      });
-      await this.fetchActiveSessions();
-    } catch {
-      // ignore
+      return { success: false, error: 'Помилка з’єднання з сервером' };
     }
   }
 
-  // Logout current session
-  public async logout(): Promise<void> {
+  public async loginAsGuest(): Promise<{ success: boolean; error?: string }> {
     try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        headers: this.getAuthHeaders()
-      });
-    } catch {
-      // ignore
-    }
-    this.token = null;
-    this.currentUser = null;
-    localStorage.removeItem('forgemuscle_auth_token');
-    localStorage.removeItem('forgemuscle_user_cache');
-    sound.playClick();
+      const res = await fetch('/api/auth/guest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locale: this.user.settings.language }) });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data.error || 'Не вдалося створити гостьовий акаунт' };
+      await this.checkSession();
+      try { const { socketClient } = await import('./socketClient'); socketClient.disconnect(); socketClient.connect(); } catch {}
+      return { success: true };
+    } catch { return { success: false, error: 'Помилка з’єднання з сервером' }; }
+  }
+
+  public async logout() {
+    try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {}
+    this.isAuthenticated = false;
+    this.user = { ...DEFAULT_GUEST };
+    try { const { socketClient } = await import('./socketClient'); socketClient.disconnect(); } catch {}
     this.notify();
   }
 
-  // Logout all devices (#73)
-  public async logoutAllDevices(): Promise<void> {
-    try {
-      await fetch('/api/auth/logout-all', {
-        method: 'POST',
-        headers: this.getAuthHeaders()
-      });
-    } catch {
-      // ignore
+  public async updateProfile(nick: string, avatar: string) {
+    this.user.nick = nick.trim();
+    this.user.avatar = avatar;
+    if (this.isAuthenticated) {
+      try {
+        await fetch('/api/auth/update-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nick: this.user.nick, avatar: this.user.avatar })
+        });
+      } catch {}
     }
-    this.token = null;
-    this.currentUser = null;
-    localStorage.removeItem('forgemuscle_auth_token');
-    localStorage.removeItem('forgemuscle_user_cache');
-    sound.playClick();
     this.notify();
   }
 
-  // Delete Account (#72)
-  public async deleteAccount(confirmUsername: string): Promise<void> {
-    const res = await fetch('/api/auth/delete-account', {
-      method: 'DELETE',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify({ confirmUsername })
-    });
-
-    if (!res.ok) {
-      const errData = await res.json();
-      throw new Error(errData.error || "Не вдалося видалити акаунт.");
+  public async updateSettings(partial: Partial<UserSettings>) {
+    const previousLanguage = this.user.settings.language;
+    this.user.settings = { ...this.user.settings, ...partial };
+    if (partial.language && partial.language !== previousLanguage && (!this.isAuthenticated || this.user.id === 'usr_guest')) {
+      this.user.nick = getLocalizedGuestNick(partial.language);
     }
-
-    this.token = null;
-    this.currentUser = null;
-    localStorage.clear(); // Clean all local storage
-    sound.playClick();
+    if (partial.theme) {
+      this.applyTheme(partial.theme);
+    }
+    if (this.isAuthenticated) {
+      try {
+        await fetch('/api/auth/update-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            theme: this.user.settings.theme,
+            locale: this.user.settings.language,
+            soundEnabled: this.user.settings.soundEnabled,
+            hapticEnabled: this.user.settings.hapticEnabled,
+            privacy: this.user.settings.privacy,
+            micEnabled: this.user.settings.micEnabled,
+            cameraEnabled: this.user.settings.cameraEnabled,
+            pushToTalk: this.user.settings.pushToTalk,
+            showSkeleton: this.user.settings.showSkeleton,
+            mirrorVideo: this.user.settings.mirrorVideo
+          })
+        });
+      } catch {}
+    }
     this.notify();
   }
 
-  // Cloud Progress Sync (#68)
-  public async syncProgress(payload: Partial<CloudProgressSyncPayload>): Promise<void> {
-    if (!this.token) return;
-
-    this.syncStatus = 'syncing';
+  public async completeOnboarding() {
+    this.user.onboardingCompleted = true;
+    if (this.isAuthenticated) {
+      try {
+        await fetch('/api/auth/update-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ onboardingCompleted: true })
+        });
+      } catch {}
+    }
     this.notify();
+  }
 
-    try {
-      const res = await fetch('/api/user/progress/sync', {
-        method: 'POST',
-        headers: this.getAuthHeaders(),
-        body: JSON.stringify(payload)
-      });
+  public applyTheme(theme: 'dark' | 'light' | 'system') {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    root.classList.remove('dark', 'light');
 
-      if (res.ok) {
-        const data = await res.json();
-        this.syncStatus = 'synced';
-        this.lastSyncedTime = new Date().toLocaleTimeString();
-        if (data.user) {
-          this.currentUser = data.user;
-          localStorage.setItem('forgemuscle_user_cache', JSON.stringify(data.user));
-        }
-      } else {
-        this.syncStatus = 'error';
-      }
-    } catch {
-      this.syncStatus = 'offline';
-    } finally {
-      this.notify();
+    if (theme === 'system') {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.classList.add(prefersDark ? 'dark' : 'light');
+    } else {
+      root.classList.add(theme);
     }
   }
 
-  // Schedule background debounced sync
-  public triggerDebouncedSync(payloadSupplier: () => Partial<CloudProgressSyncPayload>) {
-    if (this.syncTimer) clearTimeout(this.syncTimer);
-    this.syncTimer = setTimeout(() => {
-      this.syncProgress(payloadSupplier());
-    }, 1500);
+  public async deleteAccount(): Promise<boolean> {
+    if (this.isAuthenticated) {
+      try {
+        await fetch('/api/auth/account', { method: 'DELETE' });
+      } catch {}
+    }
+    this.isAuthenticated = false;
+    this.user = { ...DEFAULT_GUEST };
+    this.notify();
+    return true;
   }
 }
 

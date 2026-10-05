@@ -1,0 +1,31 @@
+import { VoiceRoom } from '../types';
+import { authStore } from './authStore';
+import { forgeGameStore } from './forgeGameStore';
+import { socketClient } from './socketClient';
+
+class VoiceService {
+  private activeRoomId:string|null=null; private isMuted=false; private isSpeaking=false; private stream:MediaStream|null=null;
+  private peers=new Map<string,RTCPeerConnection>(); private pendingIce=new Map<string,RTCIceCandidateInit[]>(); private iceServers: RTCIceServer[]=[{urls:'stun:stun.l.google.com:19302'}]; private audio=new Map<string,HTMLAudioElement>(); private listeners=new Set<()=>void>();
+  private rooms:VoiceRoom[]=[]; private unsub:(()=>void)[]=[]; public micPermissionError:string|null=null;
+  constructor(){
+    this.unsub.push(socketClient.on('voice_room_update',(d)=>{ if(d.roomId===this.activeRoomId){ const r=this.rooms.find(x=>x.id===d.roomId); if(r)r.participants=d.participants||[]; this.reconcilePeers(d.participants||[]); this.notify(); }}));
+    this.unsub.push(socketClient.on('voice_signal',(d)=>this.handleSignal(d)));
+    this.unsub.push(socketClient.on('voice_room_error',(d)=>{this.micPermissionError=d.message||'Voice room is unavailable';this.notify();}));
+    if(typeof window!=='undefined') fetch('/api/voice/rooms').then(r=>r.json()).then(d=>{this.rooms=(d.rooms||[]).map((x:any)=>({...x,participants:[]}));this.notify();}).catch(()=>{});
+  }
+  subscribe(fn:()=>void){this.listeners.add(fn);return()=>this.listeners.delete(fn)} private notify(){this.listeners.forEach(f=>f())}
+  getRooms(){return this.rooms} getActiveRoom(){return this.rooms.find(r=>r.id===this.activeRoomId)} getActiveRoomId(){return this.activeRoomId} getIsMuted(){return this.isMuted} getIsSpeaking(){return this.isSpeaking}
+  async joinRoom(roomId:string){ if(this.activeRoomId===roomId)return true; this.leaveRoom(); this.micPermissionError=null; let room=this.rooms.find(r=>r.id===roomId); if(!room){ room={id:roomId,name:roomId,maxUsers:2,participants:[],isMatchRoom:true}; this.rooms.push(room); } try { const cfg=await fetch('/api/voice/ice-config'); if(cfg.ok){const d=await cfg.json(); if(Array.isArray(d.iceServers)) this.iceServers=d.iceServers;} } catch {}
+    if(!navigator.mediaDevices?.getUserMedia){this.micPermissionError='Microphone access requires a secure HTTPS context.';this.notify();return false;}
+    try{this.stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false}); this.isMuted=false; this.stream.getAudioTracks().forEach(t=>t.enabled=true);}catch{this.micPermissionError='Microphone access was denied. You can listen without transmitting audio.';this.isMuted=true;}
+    this.activeRoomId=roomId; socketClient.send('voice_join',{roomId,isMuted:this.isMuted}); forgeGameStore.incrementQuest('daily_voice',1); this.notify(); return true;
+  }
+  leaveRoom(){if(!this.activeRoomId)return; socketClient.send('voice_leave',{}); this.closePeers(); this.stopStream(); this.activeRoomId=null;this.isSpeaking=false;this.notify()}
+  toggleMute(){this.isMuted=!this.isMuted;this.stream?.getAudioTracks().forEach(t=>t.enabled=!this.isMuted);socketClient.send('voice_mute',{isMuted:this.isMuted});this.notify()}
+  setPtt(active:boolean){if(!this.stream)return; this.isMuted=!active;this.stream.getAudioTracks().forEach(t=>t.enabled=active);socketClient.send('voice_mute',{isMuted:this.isMuted});this.notify()}
+  private reconcilePeers(participants:{userId:string}[]){const me=authStore.getUser().id; if(!this.activeRoomId)return; for(const p of participants){if(p.userId===me)continue; if(!this.peers.has(p.userId)) this.createPeer(p.userId,p.userId>me);} for(const id of [...this.peers.keys()])if(!participants.some(p=>p.userId===id))this.closePeer(id);}
+  private createPeer(id:string,initiator:boolean){const pc=new RTCPeerConnection({iceServers:this.iceServers});this.peers.set(id,pc);this.pendingIce.set(id,[]);this.stream?.getTracks().forEach(t=>pc.addTrack(t,this.stream!));pc.onicecandidate=e=>{if(e.candidate)socketClient.send('voice_signal',{targetUserId:id,signal:{type:'ice',candidate:e.candidate.toJSON()}})};pc.ontrack=e=>{let a=this.audio.get(id);if(!a){a=document.createElement('audio');a.autoplay=true;document.body.appendChild(a);this.audio.set(id,a);}a.srcObject=e.streams[0];void a.play().catch(()=>{});};pc.onconnectionstatechange=()=>{if(['failed','closed','disconnected'].includes(pc.connectionState))this.closePeer(id)};if(initiator)void pc.createOffer().then(o=>pc.setLocalDescription(o)).then(()=>{const d=pc.localDescription;if(d)socketClient.send('voice_signal',{targetUserId:id,signal:{type:d.type,sdp:d.sdp}})}).catch(e=>{console.error('[Voice] offer failed',e);this.micPermissionError='Voice negotiation failed';this.notify();});}
+private async handleSignal(d:any){if(!this.activeRoomId||!d.fromUserId)return;let pc=this.peers.get(d.fromUserId);if(!pc)this.createPeer(d.fromUserId,false);pc=this.peers.get(d.fromUserId)!;const sig=d.signal;try{if(sig.type==='offer'){await pc.setRemoteDescription({type:'offer',sdp:String(sig.sdp||'')});const a=await pc.createAnswer();await pc.setLocalDescription(a);const ld=pc.localDescription;if(ld)socketClient.send('voice_signal',{targetUserId:d.fromUserId,signal:{type:'answer',sdp:ld.sdp}});for(const c of this.pendingIce.get(d.fromUserId)||[])await pc.addIceCandidate(c);this.pendingIce.set(d.fromUserId,[]);}else if(sig.type==='answer'){await pc.setRemoteDescription({type:'answer',sdp:String(sig.sdp||'')});for(const c of this.pendingIce.get(d.fromUserId)||[])await pc.addIceCandidate(c);this.pendingIce.set(d.fromUserId,[]);}else if(sig.type==='ice'&&sig.candidate){if(pc.remoteDescription)await pc.addIceCandidate(sig.candidate);else this.pendingIce.get(d.fromUserId)?.push(sig.candidate);}}catch(e){console.error('[Voice] signaling error',e);this.micPermissionError='Voice connection error';this.notify();}}
+private closePeer(id:string){const p=this.peers.get(id);p?.close();this.peers.delete(id);this.pendingIce.delete(id);const a=this.audio.get(id);if(a){a.srcObject=null;a.remove();this.audio.delete(id)}} private closePeers(){for(const id of this.peers.keys())this.closePeer(id)} private stopStream(){this.stream?.getTracks().forEach(t=>t.stop());this.stream=null}
+}
+export const voiceService=new VoiceService();

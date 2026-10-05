@@ -1,6 +1,9 @@
 {
   "name": "ForgeMuscle",
-  "description": "ForgeMuscle turns physical workouts into verifiable competitions with computer vision tracking and Solana achievements.",
-  "requestFramePermissions": ["camera"],
+  "description": "Фітнес-платформа для новачків: навчання основам тренувань, 60-секундні дуелі перед камерою зі штучним інтелектом підрахунку повторів, квести, титули та голос.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,653 +1,395 @@
-import { 
-  ForgePassportData, 
-  ForgeProgressionTier, 
-  ForgeProgressionInfo, 
-  VerificationProofEnvelope, 
-  VerifiedExerciseKind,
-  VerifiedRepDetail,
-  BattleSessionData
-} from '../types';
-import { TelemetryFrame } from './pose/serverWorkoutVerifier';
+import { ExerciseId, LeaderboardEntry, Quest, UserProgress } from '../types';
+import { TITLES_LIST } from '../data/exercisesData';
+import { storageManager } from './storageManager';
 
-export const FORGE_TIER_CONFIG: Record<ForgeProgressionTier, ForgeProgressionInfo> = {
-  raw_metal: {
-    tier: 'raw_metal',
-    title: 'Raw Metal',
-    subtitle: 'Сирий Метал',
-    badge: '🌑',
-    minRepsRequired: 0,
-    minWinsRequired: 0,
-    unlockCondition: 'Початок шляху в Кузні. Ще жодного верифікованого повторення.',
-    color: 'text-neutral-400',
-    auraGradient: 'from-neutral-700 to-neutral-900'
+const INITIAL_QUESTS: Quest[] = [
+  // Starter Quests
+  {
+    id: 'starter_quiz',
+    type: 'starter',
+    title: 'Пройти вступний тест',
+    desc: 'Дай відповіді на 3 короткі питання про свій досвід і ціль',
+    goal: 1,
+    current: 0,
+    rewardXp: 40,
+    rewardTitleId: 'novice',
+    completed: false,
+    claimed: false
   },
-  forged: {
-    tier: 'forged',
-    title: 'Forged',
-    subtitle: 'Викуваний',
-    badge: '🔨',
-    minRepsRequired: 25,
-    minWinsRequired: 0,
-    unlockCondition: 'Верифіковано перші 25 повторень перед камерою з контролем амплітуди.',
-    color: 'text-amber-400',
-    auraGradient: 'from-amber-600/30 to-amber-950/40'
+  {
+    id: 'starter_read_basics',
+    type: 'starter',
+    title: 'Ознайомся з основами',
+    desc: 'Прочитай хоча б 1 картку про прогресивне навантаження або харчування',
+    goal: 1,
+    current: 0,
+    rewardXp: 35,
+    completed: false,
+    claimed: false
   },
-  muscles: {
-    tier: 'muscles',
-    title: 'Muscles',
-    subtitle: 'Сталеві Мʼязи',
-    badge: '💪',
-    minRepsRequired: 50,
-    minWinsRequired: 1,
-    unlockCondition: '50+ верифікованих повторень та 1 перемога у 60s Forge Battle.',
-    color: 'text-orange-400',
-    auraGradient: 'from-orange-600/30 to-orange-950/40'
+  {
+    id: 'starter_calibration',
+    type: 'starter',
+    title: 'Калібрування камери',
+    desc: 'Перевір огляд камери та ракурс перед боєм',
+    goal: 1,
+    current: 0,
+    rewardXp: 35,
+    completed: false,
+    claimed: false
   },
-  armor: {
-    tier: 'armor',
-    title: 'Armor',
-    subtitle: 'Броня Кузні',
-    badge: '🛡️',
-    minRepsRequired: 150,
-    minWinsRequired: 3,
-    unlockCondition: '150+ верифікованих повторень та 3 перемоги в дуелях.',
-    color: 'text-cyan-400',
-    auraGradient: 'from-cyan-600/30 to-cyan-950/40'
+  {
+    id: 'starter_first_battle',
+    type: 'starter',
+    title: 'Перший Forge Battle',
+    desc: 'Проведи свою першу 60-секундну дуель',
+    goal: 1,
+    current: 0,
+    rewardXp: 80,
+    rewardTitleId: 'first_blood',
+    completed: false,
+    claimed: false
   },
-  fire_aura: {
-    tier: 'fire_aura',
-    title: 'Fire Aura',
-    subtitle: 'Вогняна Аура',
-    badge: '🔥',
-    minRepsRequired: 300,
-    minWinsRequired: 5,
-    unlockCondition: '300+ верифікованих повторень та 5 перемог у батлах.',
-    color: 'text-red-400',
-    auraGradient: 'from-red-600/40 to-amber-950/50'
+
+  // Daily Quests
+  {
+    id: 'daily_20reps',
+    type: 'daily',
+    title: '20 якісних повторів',
+    desc: 'Зроби сумарно 20 повторів будь-якої вправи перед камерою',
+    goal: 20,
+    current: 0,
+    rewardXp: 50,
+    completed: false,
+    claimed: false
   },
-  tempered_steel: {
-    tier: 'tempered_steel',
-    title: 'Tempered Steel',
-    subtitle: 'Загартована Сталь',
-    badge: '⚔️',
-    minRepsRequired: 600,
-    minWinsRequired: 10,
-    unlockCondition: '600+ верифікованих повторень та 10 перемог у дуелях.',
-    color: 'text-violet-400',
-    auraGradient: 'from-violet-600/40 to-purple-950/50'
+  {
+    id: 'daily_win',
+    type: 'daily',
+    title: 'Смак перемоги',
+    desc: 'Виграй хоча б одну дуель у Battle',
+    goal: 1,
+    current: 0,
+    rewardXp: 60,
+    completed: false,
+    claimed: false
   },
-  legendary_forge: {
-    tier: 'legendary_forge',
-    title: 'Legendary Forge',
-    subtitle: 'Легенда Кузні',
-    badge: '👑',
-    minRepsRequired: 1000,
-    minWinsRequired: 20,
-    unlockCondition: '1000+ верифікованих повторень та 20 перемог у 60-секундних битвах.',
-    color: 'text-amber-300',
-    auraGradient: 'from-amber-400/50 via-red-500/30 to-purple-900/60'
+  {
+    id: 'daily_voice',
+    type: 'daily',
+    title: 'Голосове коло',
+    desc: 'Завітай у будь-яку голосову кімнату',
+    goal: 1,
+    current: 0,
+    rewardXp: 25,
+    completed: false,
+    claimed: false
+  },
+
+  // Weekly Quests
+  {
+    id: 'weekly_5battles',
+    type: 'weekly',
+    title: 'Боєць тижня',
+    desc: 'Проведи 5 повноцінних боїв за цей тиждень',
+    goal: 5,
+    current: 0,
+    rewardXp: 120,
+    completed: false,
+    claimed: false
+  },
+  {
+    id: 'weekly_300xp',
+    type: 'weekly',
+    title: 'XP Прорив',
+    desc: 'Зароби 300 XP на тренуваннях та завданнях',
+    goal: 300,
+    current: 0,
+    rewardXp: 150,
+    completed: false,
+    claimed: false
+  },
+  {
+    id: 'weekly_streak',
+    type: 'weekly',
+    title: 'Серія заліза',
+    desc: 'Тренуйся 3 дні поспіль',
+    goal: 3,
+    current: 1,
+    rewardXp: 100,
+    rewardTitleId: 'iron_will',
+    completed: false,
+    claimed: false
   }
-};
+];
 
-export interface SponsorChallenge {
-  id: string;
-  sponsorName: string;
-  sponsorLogo: string;
-  title: string;
-  rewardPool: string;
-  description: string;
-  qualifyingReps: number;
-  endDate: string;
-}
-
-export const ACTIVE_SPONSOR_CHALLENGE: SponsorChallenge = {
-  id: 'sp_gymbeam_solana_1',
-  sponsorName: 'GymBeam & Solana Foundation',
-  sponsorLogo: '⚡',
-  title: 'Titan Verified Reps Challenge',
-  rewardPool: '$500 Sponsor Reward Pool',
-  description: 'Призовий фонд від офіційних спонсорів за підтверджені камерою повторення. Жодних грошових ставок між гравцями — 100% чесний спорт та фіксація в блокчейні.',
-  qualifyingReps: 25,
-  endDate: '30 вересня 2026'
+const INITIAL_PROGRESS: UserProgress = {
+  userId: 'usr_novice_1',
+  xp: 0,
+  level: 1,
+  activeTitleId: 'novice',
+  unlockedTitleIds: ['novice'],
+  stats: {
+    totalWins: 0,
+    totalLosses: 0,
+    totalReps: 0,
+    streakDays: 1,
+    lastActiveDate: new Date().toISOString().split('T')[0],
+    exerciseReps: {
+      pushups: 0,
+      squats: 0,
+      pullups: 0,
+      jumping_jacks: 0,
+      burpees: 0,
+      lunges: 0,
+      dips: 0,
+      plank: 0
+    }
+  }
 };
 
 class ForgeGameStore {
-  private walletAddress: string = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
-  private passport: ForgePassportData = {
-    walletAddress: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
-    battlesCount: 0,
-    winsCount: 0,
-    lossesCount: 0,
-    totalVerifiedReps: 0,
-    personalRecords: {
-      pushups60s: 0,
-      squats60s: 0,
-      pullups60s: 0
-    },
-    forgeTier: 'raw_metal',
-    achievements: [],
-    lastActiveNonce: null,
-    reputationBadge: 'Новачок Кузні (Raw Metal)'
-  };
-
-  private currentNonce: string | null = null;
-  private currentChallenge: string = 'Статична фіксація 3с (Liveness Check)';
-  private lastVerificationEnvelope: VerificationProofEnvelope | null = null;
+  private progress: UserProgress;
+  private quests: Quest[];
   private listeners: Set<() => void> = new Set();
 
   constructor() {
-    this.loadFromLocal();
+    this.progress = this.loadProgress();
+    this.quests = this.loadQuests();
+    this.checkDailyStreak();
   }
 
-  private loadFromLocal() {
+  private loadProgress(): UserProgress {
     try {
-      const saved = localStorage.getItem('forgemuscle_passport_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // Ensure no legacy fake seeded numbers remain
-        if (parsed.totalVerifiedReps === 112 && parsed.battlesCount === 5) {
-          this.saveToLocal();
-        } else {
-          this.passport = parsed;
-          this.walletAddress = this.passport.walletAddress;
-        }
-      } else {
-        this.saveToLocal();
-      }
-    } catch {
-      // ignore
-    }
+      const saved = storageManager.getSlice<UserProgress>('progress');
+      if (saved) return saved;
+    } catch {}
+    return { ...INITIAL_PROGRESS };
   }
 
-  private saveToLocal() {
+  private loadQuests(): Quest[] {
     try {
-      localStorage.setItem('forgemuscle_passport_v2', JSON.stringify(this.passport));
-    } catch {
-      // ignore
-    }
+      const saved = storageManager.getSlice<Quest[]>('quests');
+      if (saved) return saved;
+    } catch {}
+    return JSON.parse(JSON.stringify(INITIAL_QUESTS));
   }
 
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+  private save() {
+    try {
+      storageManager.setSlice('progress', this.progress);
+      storageManager.setSlice('quests', this.quests);
+    } catch {}
+    this.notify();
   }
 
   private notify() {
     this.listeners.forEach((fn) => fn());
-    this.saveToLocal();
   }
 
-  getWalletAddress(): string {
-    return this.walletAddress;
-  }
-
-  setWalletAddress(addr: string) {
-    this.walletAddress = addr;
-    this.passport.walletAddress = addr;
-    this.notify();
-  }
-
-  getPassport(): ForgePassportData {
-    return this.passport;
-  }
-
-  getCurrentNonce(): string | null {
-    return this.currentNonce;
-  }
-
-  getCurrentChallenge(): string {
-    return this.currentChallenge;
-  }
-
-  getLastEnvelope(): VerificationProofEnvelope | null {
-    return this.lastVerificationEnvelope;
-  }
-
-  // Request fresh Anti-Replay session nonce from server
-  async requestSessionNonce(): Promise<{ nonce: string; challenge: string }> {
-    try {
-      const res = await fetch(`/api/verifier/session-nonce?wallet=${encodeURIComponent(this.walletAddress)}`);
-      if (!res.ok) throw new Error('Failed to request nonce');
-      const data = await res.json();
-      this.currentNonce = data.nonce;
-      this.currentChallenge = data.challenge;
-      this.notify();
-      return data;
-    } catch {
-      // Fallback offline nonce
-      const offlineNonce = `NONCE-OFFLINE-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-      this.currentNonce = offlineNonce;
-      this.currentChallenge = 'Статична фіксація 3с (Liveness Check)';
-      this.notify();
-      return { nonce: offlineNonce, challenge: this.currentChallenge };
-    }
-  }
-
-  // Submit workout for computer vision verification + server signing + Solana settlement
-  async submitWorkoutVerification(params: {
-    exercise: VerifiedExerciseKind;
-    durationSeconds: number;
-    validReps: number;
-    rejectedReps: number;
-    rejectionReasons: string[];
-    repDetails: VerifiedRepDetail[];
-    athleteName?: string;
-    frames?: TelemetryFrame[];
-  }): Promise<VerificationProofEnvelope> {
-    const payload = {
-      nonce: this.currentNonce || `NONCE-${Date.now()}`,
-      exercise: params.exercise,
-      durationSeconds: params.durationSeconds,
-      validReps: params.validReps,
-      rejectedReps: params.rejectedReps,
-      rejectionReasons: params.rejectionReasons,
-      repDetails: params.repDetails,
-      frames: params.frames || [],
-      athleteWallet: this.walletAddress,
-      athleteName: params.athleteName || 'Кузнець Forge'
+  public subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
     };
+  }
 
-    try {
-      const res = await fetch('/api/verifier/verify-workout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+  public getProgress(): UserProgress {
+    return this.progress;
+  }
 
-      if (res.ok) {
-        const data = await res.json();
-        this.lastVerificationEnvelope = data.envelope;
-        if (data.passport) {
-          this.passport = {
-            ...this.passport,
-            ...data.passport
-          };
-        }
-        this.notify();
-        return data.envelope;
+  public getQuests(): Quest[] {
+    return this.quests;
+  }
+
+  public getLevel(): number {
+    return this.progress.level;
+  }
+
+  // Calculate XP threshold for a level
+  public getXpForNextLevel(lvl: number): number {
+    return Math.floor(100 * Math.pow(lvl, 1.35));
+  }
+
+  public getLevelProgress(): { currentLevelXp: number; nextLevelXp: number; percent: number } {
+    let accumulated = 0;
+    for (let l = 1; l < this.progress.level; l++) {
+      accumulated += this.getXpForNextLevel(l);
+    }
+    const currentLevelXp = Math.max(0, this.progress.xp - accumulated);
+    const nextLevelXp = this.getXpForNextLevel(this.progress.level);
+    const percent = Math.min(100, Math.round((currentLevelXp / nextLevelXp) * 100));
+    return { currentLevelXp, nextLevelXp, percent };
+  }
+
+  private checkDailyStreak() {
+    const today = new Date().toISOString().split('T')[0];
+    const lastActive = this.progress.stats.lastActiveDate;
+
+    if (lastActive === today) {
+      return;
+    }
+
+    const lastDate = new Date(lastActive);
+    const currDate = new Date(today);
+    const diffDays = Math.round((currDate.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 1) {
+      this.progress.stats.streakDays += 1;
+      this.incrementQuest('weekly_streak', 1);
+      if (this.progress.stats.streakDays >= 7) {
+        this.unlockTitle('iron_will');
       }
-    } catch (err) {
-      console.warn('Backend verifier endpoint fallback:', err);
+    } else if (diffDays > 1) {
+      this.progress.stats.streakDays = 1;
     }
-
-    // Client-side deterministic cryptographic fallback
-    const envelope: VerificationProofEnvelope = {
-      sessionId: `verif_client_${Date.now()}`,
-      sessionNonce: payload.nonce,
-      athleteWallet: this.walletAddress,
-      athleteName: payload.athleteName,
-      exercise: params.exercise,
-      durationSeconds: params.durationSeconds,
-      validReps: params.validReps,
-      rejectedReps: params.rejectedReps,
-      rejectionReasons: params.rejectionReasons,
-      repDetails: params.repDetails,
-      livenessPassed: true,
-      antiReplayNonceValid: true,
-      anomalyScore: 0,
-      proofHash: `sha256_${Date.now()}_${params.validReps}`,
-      serverSignature: `ed25519_sig_${Date.now()}`,
-      verifierPublicKey: 'ForgeVerifier111111111111111111111111111111',
-      timestamp: new Date().toISOString(),
-      solanaTxSignature: null,
-      solanaExplorerUrl: null,
-      status: 'VERIFIED_LOCAL'
-    };
-
-    this.lastVerificationEnvelope = envelope;
-    this.passport.totalVerifiedReps += params.validReps;
-
-    // Update PRs
-    if (params.exercise === 'pushups' && params.validReps > this.passport.personalRecords.pushups60s) {
-      this.passport.personalRecords.pushups60s = params.validReps;
-    } else if (params.exercise === 'squats' && params.validReps > this.passport.personalRecords.squats60s) {
-      this.passport.personalRecords.squats60s = params.validReps;
-    } else if (params.exercise === 'pullups' && params.validReps > this.passport.personalRecords.pullups60s) {
-      this.passport.personalRecords.pullups60s = params.validReps;
-    }
-
-    // Re-check progression tier
-    this.updateProgressionTier();
-    this.notify();
-    return envelope;
+    this.progress.stats.lastActiveDate = today;
+    this.save();
   }
 
-  // Settle Battle Duel on Solana
-  async settleBattleDuel(params: {
-    battleId: string;
-    exercise: VerifiedExerciseKind | string;
-    player1: { id: string; name: string; wallet?: string; reps?: number; validReps?: number; rejectedReps?: number };
-    player2: { id: string; name: string; wallet?: string; reps?: number; validReps?: number; rejectedReps?: number };
-    winnerId: string | 'draw';
+  public addXp(amount: number) {
+    this.progress.xp += amount;
+    this.incrementQuest('weekly_300xp', amount);
+
+    // Calculate level up
+    let totalXp = this.progress.xp;
+    let lvl = 1;
+    let needed = this.getXpForNextLevel(lvl);
+    while (totalXp >= needed) {
+      totalXp -= needed;
+      lvl++;
+      needed = this.getXpForNextLevel(lvl);
+    }
+    this.progress.level = lvl;
+    this.save();
+  }
+
+  public unlockTitle(titleId: string) {
+    if (!this.progress.unlockedTitleIds.includes(titleId)) {
+      this.progress.unlockedTitleIds.push(titleId);
+      this.save();
+    }
+  }
+
+  public setActiveTitle(titleId: string) {
+    if (this.progress.unlockedTitleIds.includes(titleId)) {
+      this.progress.activeTitleId = titleId;
+      this.save();
+    }
+  }
+
+  public incrementQuest(questId: string, amount: number) {
+    const q = this.quests.find((item) => item.id === questId);
+    if (!q || q.completed) return;
+
+    q.current = Math.min(q.goal, q.current + amount);
+    if (q.current >= q.goal) {
+      q.completed = true;
+    }
+    this.save();
+  }
+
+  public claimQuestReward(questId: string): { xpReward: number; titleReward?: string } | null {
+    const q = this.quests.find((item) => item.id === questId);
+    if (!q || !q.completed || q.claimed) return null;
+
+    q.claimed = true;
+    this.addXp(q.rewardXp);
+    if (q.rewardTitleId) {
+      this.unlockTitle(q.rewardTitleId);
+    }
+    this.save();
+    return { xpReward: q.rewardXp, titleReward: q.rewardTitleId };
+  }
+
+  public recordBattleResult(opts: {
+    exerciseId: ExerciseId;
+    isWin: boolean;
+    reps: number;
+    accuracy: number;
   }) {
-    const payload = {
-      battleId: params.battleId,
-      exercise: params.exercise,
-      player1: {
-        id: params.player1.id,
-        name: params.player1.name,
-        wallet: params.player1.wallet || params.player1.id,
-        validReps: params.player1.validReps ?? params.player1.reps ?? 0,
-        rejectedReps: params.player1.rejectedReps || 0
-      },
-      player2: {
-        id: params.player2.id,
-        name: params.player2.name,
-        wallet: params.player2.wallet || params.player2.id,
-        validReps: params.player2.validReps ?? params.player2.reps ?? 0,
-        rejectedReps: params.player2.rejectedReps || 0
-      },
-      winnerId: params.winnerId
-    };
-
-    const data = await this.settleDuel(payload as any);
-    return {
-      winnerId: data?.winnerId || params.winnerId,
-      winnerReps: data?.winnerReps ?? (params.winnerId === params.player1.id ? payload.player1.validReps : payload.player2.validReps),
-      solanaTxSignature: data?.solanaTx?.signature || '',
-      solanaExplorerUrl: data?.solanaTx?.explorerUrl || '',
-      proofHash: data?.proofHash || ''
-    };
-  }
-
-  async settleDuel(params: {
-    battleId: string;
-    exercise: VerifiedExerciseKind;
-    player1: { id: string; name: string; wallet: string; validReps: number; rejectedReps: number };
-    player2: { id: string; name: string; wallet: string; validReps: number; rejectedReps: number };
-    winnerId: string | 'draw';
-  }) {
-    try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      const savedToken = localStorage.getItem('forgemuscle_auth_token');
-      if (savedToken) headers['Authorization'] = `Bearer ${savedToken}`;
-      const res = await fetch('/api/battle/settle-duel', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(params)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        // Update local passport
-        this.passport.battlesCount += 1;
-        this.passport.totalVerifiedReps += params.player1.validReps;
-        if (params.winnerId === params.player1.id) {
-          this.passport.winsCount += 1;
-          // Add duel win achievement
-          this.passport.achievements.unshift({
-            id: `ach_battle_${Date.now()}`,
-            title: `60s ${params.exercise === 'pushups' ? 'Push-up' : params.exercise === 'squats' ? 'Squat' : 'Pull-up'} Duel Victor`,
-            description: `Перемога з ${params.player1.validReps} верифікованими повтореннями в Кузні.`,
-            earnedAt: new Date().toISOString(),
-            badgeIcon: '👑',
-            category: 'battle',
-            solanaTxSignature: data.settlement.solanaTx?.signature || null,
-            solanaExplorerUrl: data.settlement.solanaTx?.explorerUrl || null,
-            proofHash: data.settlement.proofHash
-          });
-        } else if (params.winnerId !== 'draw') {
-          this.passport.lossesCount += 1;
-        }
-
-        this.updateProgressionTier();
-        this.notify();
-        return data.settlement;
+    const { exerciseId, isWin, reps, accuracy } = opts;
+    
+    // Update stats
+    if (isWin) {
+      this.progress.stats.totalWins += 1;
+      this.incrementQuest('daily_win', 1);
+      this.unlockTitle('first_blood');
+      if (this.progress.stats.totalWins >= 10) {
+        this.unlockTitle('gladiator');
       }
-    } catch {
-      // Fallback
-    }
-
-    // Offline fallback settlement
-    const settlement = {
-      battleId: params.battleId,
-      exercise: params.exercise,
-      winnerId: params.winnerId,
-      winnerReps: params.winnerId === params.player1.id ? params.player1.validReps : params.player2.validReps,
-      proofHash: '',
-      solanaTx: {
-        signature: null,
-        status: 'not_recorded',
-        timestamp: new Date().toISOString(),
-        proofHash: '',
-        explorerUrl: null,
-        error: 'Battle server is unavailable; Solana proof was not recorded.'
-      },
-      status: 'VERIFIED_LOCAL'
-    };
-
-    this.passport.battlesCount += 1;
-    this.passport.totalVerifiedReps += params.player1.validReps;
-    if (params.winnerId === params.player1.id) {
-      this.passport.winsCount += 1;
-    }
-    this.updateProgressionTier();
-    this.notify();
-    return settlement;
-  }
-
-  async fetchBattleExercises(): Promise<any[]> {
-    try {
-      const res = await fetch('/api/battle/exercises');
-      if (res.ok) {
-        const data = await res.json();
-        return data.exercises || [];
-      }
-    } catch {
-      // fallback
-    }
-    return [
-      {
-        id: 'pushups_classic',
-        name: 'Класичні віджимання',
-        category: 'upper_body',
-        type: 'dynamic',
-        difficulty: 'beginner',
-        equipment: 'none',
-        premium: false,
-        verifier: 'push_up',
-        description: 'Базова вправа для грудей, трицепсів та стабілізації кору.',
-        icon: '💪',
-        isBattleSupported: true
-      },
-      {
-        id: 'squats_bodyweight',
-        name: 'Присідання без ваги',
-        category: 'legs',
-        type: 'dynamic',
-        difficulty: 'beginner',
-        equipment: 'none',
-        premium: false,
-        verifier: 'squat',
-        description: 'Глибокі присідання з контролем колін і випрямленням стегон.',
-        icon: '🦵',
-        isBattleSupported: true
-      },
-      {
-        id: 'pullups_classic',
-        name: 'Класичні підтягування',
-        category: 'upper_body',
-        type: 'dynamic',
-        difficulty: 'intermediate',
-        equipment: 'pullup_bar',
-        premium: false,
-        verifier: 'pull_up',
-        description: 'Тяга підборіддя вище перекладини для потужної спини.',
-        icon: '🧗',
-        isBattleSupported: true
-      }
-    ];
-  }
-
-  async selectBattleExercise(battleId: string, userId: string, exerciseId: string): Promise<{
-    success: boolean;
-    confirmedExerciseId?: string;
-    error?: string;
-    isPremiumRequired?: boolean;
-  }> {
-    try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      const savedToken = localStorage.getItem('forgemuscle_auth_token');
-      if (savedToken) {
-        headers['Authorization'] = `Bearer ${savedToken}`;
-      }
-
-      const res = await fetch('/api/battle/select-exercise', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ battleId, userId, exerciseId })
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        return {
-          success: false,
-          error: data.error || 'Помилка вибору вправи',
-          isPremiumRequired: data.isPremiumRequired
-        };
-      }
-      return {
-        success: true,
-        confirmedExerciseId: data.confirmedExerciseId
-      };
-    } catch (err: any) {
-      return { success: false, error: err.message || 'Помилка мережі' };
-    }
-  }
-
-  async confirmBattleReady(battleId: string, userId: string, ready = true): Promise<{
-    success: boolean;
-    status?: string;
-    confirmedExerciseId?: string;
-    error?: string;
-  }> {
-    try {
-      const res = await fetch('/api/battle/confirm-ready', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ battleId, userId, ready })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        return { success: false, error: data.error };
-      }
-      return {
-        success: true,
-        status: data.status,
-        confirmedExerciseId: data.confirmedExerciseId
-      };
-    } catch (err: any) {
-      return { success: false, error: err.message || 'Помилка мережі' };
-    }
-  }
-
-  async fetchBattleRoomStatus(battleId: string, userId: string): Promise<any> {
-    try {
-      const res = await fetch(`/api/battle/room/${encodeURIComponent(battleId)}?userId=${encodeURIComponent(userId)}`);
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // ignore
-    }
-    return null;
-  }
-
-  async leaveBattleRoom(battleId: string, userId: string): Promise<void> {
-    try {
-      await fetch('/api/battle/leave-room', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ battleId, userId })
-      });
-    } catch {
-      // ignore
-    }
-  }
-
-  // Matchmaking with 20s rival timeout
-  async startMatchmaking(params: {
-    exercise: VerifiedExerciseKind | string;
-    athleteName: string;
-    athleteWallet: string;
-    roomCode?: string;
-  }): Promise<{ status: 'searching' | 'matched'; battleId?: string; roomState?: string; opponent?: any; timeoutSeconds: number; roomCode: string }> {
-    try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      const savedToken = localStorage.getItem('forgemuscle_auth_token');
-      if (savedToken) {
-        headers['Authorization'] = `Bearer ${savedToken}`;
-      }
-
-      const res = await fetch('/api/battle/matchmake', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(params)
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch (err) {
-      console.warn('Matchmaking API unreachable, using local queue:', err);
-    }
-    return {
-      status: 'searching',
-      timeoutSeconds: 20,
-      roomCode: (params.roomCode || 'FORGE-GLOBAL').toUpperCase()
-    };
-  }
-
-  async checkMatchmakingStatus(roomCode: string, exercise: VerifiedExerciseKind): Promise<{
-    status: 'idle' | 'searching' | 'matched' | 'timed_out';
-    remainingSeconds?: number;
-    message?: string;
-  }> {
-    try {
-      const res = await fetch(`/api/battle/matchmake/status?roomCode=${encodeURIComponent(roomCode)}&exercise=${encodeURIComponent(exercise)}`);
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // ignore
-    }
-    return { status: 'idle' };
-  }
-
-  async cancelMatchmaking(roomCode: string, exercise: VerifiedExerciseKind): Promise<void> {
-    try {
-      await fetch('/api/battle/matchmake/cancel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomCode, exercise })
-      });
-    } catch {
-      // ignore
-    }
-  }
-
-  private updateProgressionTier() {
-    const reps = this.passport.totalVerifiedReps;
-    const wins = this.passport.winsCount;
-
-    if (reps >= 1000 && wins >= 20) {
-      this.passport.forgeTier = 'legendary_forge';
-    } else if (reps >= 600 && wins >= 10) {
-      this.passport.forgeTier = 'tempered_steel';
-    } else if (reps >= 300 && wins >= 5) {
-      this.passport.forgeTier = 'fire_aura';
-    } else if (reps >= 150 && wins >= 3) {
-      this.passport.forgeTier = 'armor';
-    } else if (reps >= 50 && wins >= 1) {
-      this.passport.forgeTier = 'muscles';
-    } else if (reps >= 25) {
-      this.passport.forgeTier = 'forged';
     } else {
-      this.passport.forgeTier = 'raw_metal';
+      this.progress.stats.totalLosses += 1;
     }
+
+    this.progress.stats.totalReps += reps;
+    this.progress.stats.exerciseReps[exerciseId] = (this.progress.stats.exerciseReps[exerciseId] || 0) + reps;
+
+    // Check titles
+    if (this.progress.stats.totalReps >= 100) {
+      this.unlockTitle('titan');
+    }
+    if (accuracy >= 95 && reps >= 10) {
+      this.unlockTitle('tech_master');
+    }
+
+    // Quests
+    this.incrementQuest('starter_first_battle', 1);
+    this.incrementQuest('daily_20reps', reps);
+    this.incrementQuest('weekly_5battles', 1);
+
+    // XP calculation: +2 XP per rep, +50 XP on win, +15 XP on loss
+    const xpGained = reps * 2 + (isWin ? 50 : 15);
+    this.addXp(xpGained);
+    this.save();
+
+    return xpGained;
   }
 
-  getTierInfo(tier?: ForgeProgressionTier): ForgeProgressionInfo {
-    const t = tier || this.passport.forgeTier;
-    return FORGE_TIER_CONFIG[t] || FORGE_TIER_CONFIG.raw_metal;
+  // Get active title data
+  public getActiveTitle(): { id: string; name: string; icon: string } {
+    const found = TITLES_LIST.find((t) => t.id === this.progress.activeTitleId);
+    return found || { id: 'novice', name: 'Новачок', icon: '🌱' };
+  }
+
+  // Get community leaderboard with current user dynamic position
+  public getLeaderboard(metric: 'xp' | 'wins' | 'reps', currentUserNick: string, currentUserAvatar: string): LeaderboardEntry[] {
+    const mockAthletes = [
+      { id: 'ath_1', nick: 'Олександр Скеля', avatar: '🦁', activeTitle: 'Титан повторів', xp: 2450, wins: 42, reps: 620 },
+      { id: 'ath_2', nick: 'Дарина Фордж', avatar: '⚡', activeTitle: 'Майстер техніки', xp: 1980, wins: 35, reps: 490 },
+      { id: 'ath_3', nick: 'Макс Вовк', avatar: '🐺', activeTitle: 'Гладіатор', xp: 1720, wins: 29, reps: 410 },
+      { id: 'ath_4', nick: 'Тарас Залізний', avatar: '🤖', activeTitle: 'Залізна воля', xp: 1540, wins: 26, reps: 380 },
+      { id: 'ath_5', nick: 'Ярослав Берсерк', avatar: '🛡️', activeTitle: 'Перша кров', xp: 1210, wins: 18, reps: 290 },
+      { id: 'ath_6', nick: 'Олена Рух', avatar: '🔥', activeTitle: 'Майстер техніки', xp: 980, wins: 14, reps: 240 },
+      { id: 'ath_7', nick: 'Богдан Швидкий', avatar: '🦅', activeTitle: 'Новачок', xp: 750, wins: 10, reps: 180 },
+      { id: 'ath_8', nick: 'Сергій Сталь', avatar: '🦾', activeTitle: 'Новачок', xp: 520, wins: 7, reps: 130 }
+    ];
+
+    const currentEntry: LeaderboardEntry = {
+      rank: 0,
+      userId: this.progress.userId,
+      nick: currentUserNick,
+      avatar: currentUserAvatar,
+      activeTitle: this.getActiveTitle().name,
+      xp: this.progress.xp,
+      wins: this.progress.stats.totalWins,
+      reps: this.progress.stats.totalReps,
+      isCurrentUser: true
+    };
+
+    const combined = [...mockAthletes.map(a => ({ ...a, userId: a.id, isCurrentUser: false })), currentEntry];
+
+    // Sort by selected metric descending
+    combined.sort((a, b) => {
+      if (metric === 'xp') return b.xp - a.xp;
+      if (metric === 'wins') return b.wins - a.wins;
+      return b.reps - a.reps;
+    });
+
+    return combined.map((item, index) => ({
+      ...item,
+      rank: index + 1
+    }));
   }
 }
 

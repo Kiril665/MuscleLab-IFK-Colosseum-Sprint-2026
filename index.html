@@ -1,23 +1,46 @@
 <!doctype html>
-<html lang="uk">
+<html lang="uk" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/jpeg" href="/logo.jpg" />
-    <title>ForgeMuscle — Verifiable Fitness Competitions</title>
-    <meta name="description" content="ForgeMuscle turns physical workouts into verifiable competitions with computer vision tracking and Solana achievements." />
-    <meta property="og:title" content="ForgeMuscle — Verifiable Fitness Competitions" />
-    <meta property="og:description" content="ForgeMuscle turns physical workouts into verifiable competitions with computer vision tracking and Solana achievements." />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ForgeMuscle — Кузня Твого Тіла | Навчись, Зроби, Переможи</title>
+    <meta name="description" content="Фітнес-платформа нового покоління: розумний комп'ютерний зір перед камерою, 60-секундні дуелі, живий голос, квести та прокачка атлета." />
+    
+    <!-- PWA & Mobile -->
+    <meta name="theme-color" content="#FF4D00" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="apple-touch-icon" href="/logo.png" />
+
+    <!-- OpenGraph / Social -->
+    <meta property="og:title" content="ForgeMuscle — Кузня Твого Тіла" />
+    <meta property="og:description" content="Фітнес-платформа нового покоління: розумний комп'ютерний зір перед камерою, 60-секундні дуелі, квести та прокачка атлета." />
+    <meta property="og:image" content="/og-image.png" />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="/og-image.png" />
+
+    <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800;900&family=Oswald:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,500;0,600;0,700;1,700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Russo+One&display=swap" rel="stylesheet">
+
   </head>
-  <body class="bg-neutral-950 text-neutral-100 selection:bg-amber-600 selection:text-white antialiased overflow-x-hidden">
+  <body class="bg-[#0B0D11] text-slate-100 antialiased selection:bg-[#FF6B00] selection:text-white overflow-x-hidden min-h-screen">
     <div id="root"></div>
+    <script type="module">
+      if (import.meta.env.DEV && 'serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(async (registrations) => {
+          await Promise.all(registrations.map((registration) => registration.unregister()));
+          if ('caches' in window) {
+            const keys = await caches.keys();
+            await Promise.all(
+              keys.filter((key) => key.startsWith('forgemuscle-cache-')).map((key) => caches.delete(key))
+            );
+          }
+        }).catch(() => {});
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
